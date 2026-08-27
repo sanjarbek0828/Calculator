@@ -69,7 +69,8 @@ export default function PhotosTab() {
         'photos',
         asset.fileName || `photo_${Date.now()}.jpg`,
         asset.mimeType || 'image/jpeg',
-        autoDelete
+        autoDelete,
+        asset.assetId
       );
     }
 

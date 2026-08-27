@@ -127,7 +127,8 @@ export async function importFile(
   type: VaultFileType,
   originalName: string,
   mimeType: string,
-  deleteOriginal: boolean = false
+  deleteOriginal: boolean = false,
+  assetId?: string | null
 ): Promise<VaultFile> {
   if (Platform.OS === 'web') {
     return { id: 'test', originalName: 'test', vaultPath: '', uri: '', mimeType: '', type, importedAt: Date.now(), sizeBytes: 0 };
@@ -167,14 +168,9 @@ export async function importFile(
   if (deleteOriginal && (type === 'photos' || type === 'videos')) {
     try {
       const { status } = await MediaLibrary.requestPermissionsAsync();
-      if (status === 'granted') {
-        // Try to find the asset in the media library
-        const asset = await MediaLibrary.createAssetAsync(sourceUri).catch(
-          () => null
-        );
-        if (asset) {
-          await MediaLibrary.deleteAssetsAsync([asset.id]);
-        }
+      if (status === 'granted' && assetId) {
+        // Delete the original asset using its ID
+        await MediaLibrary.deleteAssetsAsync([assetId]);
       }
     } catch {
       // Silently fail — the file is already safely in the vault

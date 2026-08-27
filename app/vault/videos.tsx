@@ -68,7 +68,8 @@ export default function VideosTab() {
         'videos',
         asset.fileName || `video_${Date.now()}.mp4`,
         asset.mimeType || 'video/mp4',
-        autoDelete
+        autoDelete,
+        asset.assetId
       );
     }
 

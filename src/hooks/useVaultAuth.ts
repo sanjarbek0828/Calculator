@@ -32,10 +32,20 @@ export function useVaultAuth() {
       const pinValid = await PinService.verifyPin(pinCandidate);
       if (!pinValid) return false;
 
-      // PIN is correct — now check biometric if enabled
+      // PIN is correct.
+      // If biometric is enabled, try it. If it fails, we will still allow entry
+      // because they have successfully entered the correct PIN (fallback).
+      // However, we should still prompt them since they enabled it.
       if (isBiometricEnabled) {
         const biometricOk = await checkBiometric();
-        return biometricOk;
+        if (!biometricOk) {
+          // If biometric fails (e.g. lockout or cancel), we still let them in
+          // because they proved knowledge of the PIN.
+          Alert.alert(
+            'Biometric Failed',
+            'Your biometric verification failed, but you entered the correct PIN.'
+          );
+        }
       }
 
       return true;

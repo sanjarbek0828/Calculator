@@ -41,7 +41,7 @@ export default function CalculatorScreen() {
   // Callback when vault PIN is entered correctly
   const handleVaultUnlocked = useCallback(() => {
     openVault();
-    router.push('/vault');
+    router.push('/vault/photos');
   }, [openVault, router]);
 
   const calc = useCalculator(handleVaultUnlocked);

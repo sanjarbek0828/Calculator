@@ -36,7 +36,16 @@
         }
       ],
       "expo-secure-store",
-      "expo-video"
+      "expo-video",
+      [
+        "expo-build-properties",
+        {
+          "android": {
+            "enableProguardInReleaseBuilds": true,
+            "extraProguardRules": "-keep class com.calculator.app.** { *; }\n-dontwarn com.calculator.app.**"
+          }
+        }
+      ]
     ],
     "experiments": {
       "typedRoutes": true
