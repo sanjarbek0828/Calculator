@@ -1,8 +1,11 @@
 /**
- * VaultGridItem.tsx — Thumbnail card for vault file grid
+ * VaultGridItem.tsx — Thumbnail card for vault file grid (v2)
  *
- * Renders a photo/video thumbnail or document icon with
- * long-press support for export/delete actions.
+ * Renders a photo/video thumbnail or document icon.
+ * Supports:
+ * - Long-press for context menu (single mode) OR select (multi-select mode)
+ * - Multi-select visual indicator (checkmark overlay)
+ * - Haptic feedback
  */
 
 import React, { useCallback } from 'react';
@@ -16,6 +19,7 @@ import {
   Dimensions,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
+import * as Haptics from 'expo-haptics';
 import type { VaultFile } from '../services/vaultStorage';
 
 const SCREEN_WIDTH = Dimensions.get('window').width;
@@ -26,38 +30,48 @@ const ITEM_SIZE = (SCREEN_WIDTH - ITEM_MARGIN * (NUM_COLUMNS + 1) * 2) / NUM_COL
 interface Props {
   file: VaultFile;
   onPress: (file: VaultFile) => void;
+  onLongPress?: (file: VaultFile) => void;
   onExport: (file: VaultFile) => void;
   onDelete: (file: VaultFile) => void;
+  isSelected?: boolean;
+  isSelectMode?: boolean;
 }
 
-export function VaultGridItem({ file, onPress, onExport, onDelete }: Props) {
+export function VaultGridItem({
+  file,
+  onPress,
+  onLongPress,
+  onExport,
+  onDelete,
+  isSelected = false,
+  isSelectMode = false,
+}: Props) {
   const handleLongPress = useCallback(() => {
-    Alert.alert(file.originalName, 'Choose an action', [
-      {
-        text: 'Export to Gallery',
-        onPress: () => onExport(file),
-      },
-      {
-        text: 'Delete Permanently',
-        style: 'destructive',
-        onPress: () => {
-          Alert.alert(
-            'Delete File',
-            'This file will be permanently removed from the vault. This cannot be undone.',
-            [
-              { text: 'Cancel', style: 'cancel' },
-              {
-                text: 'Delete',
-                style: 'destructive',
-                onPress: () => onDelete(file),
-              },
-            ]
-          );
+    if (onLongPress) {
+      onLongPress(file);
+    } else {
+      // Fallback: context menu
+      Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+      Alert.alert(file.originalName, 'Choose an action', [
+        { text: 'Export to Gallery', onPress: () => onExport(file) },
+        {
+          text: 'Delete Permanently',
+          style: 'destructive',
+          onPress: () => {
+            Alert.alert(
+              'Delete File',
+              'This file will be permanently removed from the vault.',
+              [
+                { text: 'Cancel', style: 'cancel' },
+                { text: 'Delete', style: 'destructive', onPress: () => onDelete(file) },
+              ]
+            );
+          },
         },
-      },
-      { text: 'Cancel', style: 'cancel' },
-    ]);
-  }, [file, onExport, onDelete]);
+        { text: 'Cancel', style: 'cancel' },
+      ]);
+    }
+  }, [file, onLongPress, onExport, onDelete]);
 
   const isImage = file.type === 'photos';
   const isVideo = file.type === 'videos';
@@ -66,10 +80,11 @@ export function VaultGridItem({ file, onPress, onExport, onDelete }: Props) {
     <Pressable
       onPress={() => onPress(file)}
       onLongPress={handleLongPress}
-      delayLongPress={500}
+      delayLongPress={400}
       style={({ pressed }) => [
         styles.container,
         pressed && styles.pressed,
+        isSelected && styles.selectedContainer,
       ]}
     >
       {isImage || isVideo ? (
@@ -80,18 +95,30 @@ export function VaultGridItem({ file, onPress, onExport, onDelete }: Props) {
         </View>
       )}
 
-      {/* Video duration badge */}
-      {isVideo && (
+      {/* Video play badge */}
+      {isVideo && !isSelected && (
         <View style={styles.videoBadge}>
           <Ionicons name="play" size={10} color="#FFF" />
         </View>
       )}
 
-      {/* File name overlay for documents */}
+      {/* Document name overlay */}
       {!isImage && !isVideo && (
         <Text style={styles.docName} numberOfLines={2}>
           {file.originalName}
         </Text>
+      )}
+
+      {/* Multi-select overlay */}
+      {isSelectMode && (
+        <View style={[styles.selectOverlay, isSelected && styles.selectOverlayActive]}>
+          {isSelected && (
+            <View style={styles.checkCircle}>
+              <Ionicons name="checkmark" size={14} color="#FFF" />
+            </View>
+          )}
+          {!isSelected && <View style={styles.emptyCircle} />}
+        </View>
       )}
     </Pressable>
   );
@@ -107,7 +134,12 @@ const styles = StyleSheet.create({
     backgroundColor: '#1C1C1E',
   },
   pressed: {
-    opacity: 0.7,
+    opacity: 0.75,
+  },
+  selectedContainer: {
+    borderWidth: 2,
+    borderColor: '#FF9500',
+    borderRadius: 6,
   },
   thumbnail: {
     width: '100%',
@@ -124,10 +156,10 @@ const styles = StyleSheet.create({
     position: 'absolute',
     bottom: 6,
     right: 6,
-    backgroundColor: 'rgba(0,0,0,0.6)',
+    backgroundColor: 'rgba(0,0,0,0.65)',
     borderRadius: 10,
-    width: 20,
-    height: 20,
+    width: 22,
+    height: 22,
     justifyContent: 'center',
     alignItems: 'center',
   },
@@ -139,6 +171,37 @@ const styles = StyleSheet.create({
     fontSize: 10,
     color: '#AEAEB2',
     textAlign: 'center',
+  },
+  selectOverlay: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
+    bottom: 0,
+    justifyContent: 'flex-end',
+    alignItems: 'flex-end',
+    padding: 5,
+  },
+  selectOverlayActive: {
+    backgroundColor: 'rgba(0,0,0,0.25)',
+  },
+  checkCircle: {
+    width: 22,
+    height: 22,
+    borderRadius: 11,
+    backgroundColor: '#FF9500',
+    justifyContent: 'center',
+    alignItems: 'center',
+    borderWidth: 2,
+    borderColor: '#FFF',
+  },
+  emptyCircle: {
+    width: 22,
+    height: 22,
+    borderRadius: 11,
+    borderWidth: 2,
+    borderColor: 'rgba(255,255,255,0.8)',
+    backgroundColor: 'rgba(0,0,0,0.3)',
   },
 });
 

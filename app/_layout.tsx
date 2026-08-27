@@ -30,6 +30,14 @@ export default function RootLayout() {
     ensureVaultDirs();
   }, []);
 
+  const isPickingMedia = useVaultStore((s) => s.isPickingMedia);
+  const isPickingMediaRef = useRef(false);
+
+  // Keep a ref in sync so the AppState callback always sees latest value
+  useEffect(() => {
+    isPickingMediaRef.current = isPickingMedia;
+  }, [isPickingMedia]);
+
   // ── Auto-lock: return to calculator when app goes to background ──
   useEffect(() => {
     const subscription = AppState.addEventListener(
@@ -39,6 +47,9 @@ export default function RootLayout() {
           appState.current === 'active' &&
           (nextState === 'background' || nextState === 'inactive')
         ) {
+          // Don't lock if user is just picking media from gallery
+          if (isPickingMediaRef.current) return;
+
           // App is going to background — close vault and go to calculator
           if (isVaultOpen) {
             closeVault();

@@ -8,7 +8,7 @@
  * - Exit to calculator
  */
 
-import React, { useState, useCallback } from 'react';
+import React, { useState, useCallback, useEffect } from 'react';
 import {
   View,
   Text,
@@ -28,7 +28,7 @@ import * as LocalAuthentication from 'expo-local-authentication';
 import { changePin } from '../../src/services/pinService';
 import * as Store from '../../src/services/secureStore';
 import { useVaultStore } from '../../src/store/vaultStore';
-import { getFileCounts } from '../../src/services/vaultStorage';
+import { getFileCounts, type VaultFileType } from '../../src/services/vaultStorage';
 
 export default function SettingsTab() {
   const router = useRouter();
@@ -43,6 +43,11 @@ export default function SettingsTab() {
   const [newPin, setNewPin] = useState('');
   const [confirmPin, setConfirmPin] = useState('');
   const [pinStep, setPinStep] = useState<'old' | 'new' | 'confirm'>('old');
+  const [fileCounts, setFileCounts] = useState<Record<VaultFileType, number>>({ photos: 0, videos: 0, documents: 0 });
+
+  useEffect(() => {
+    getFileCounts().then(setFileCounts);
+  }, []);
 
   // ── Toggle biometric ──────────────────────────────────────────
   const handleBiometricToggle = useCallback(
@@ -173,6 +178,28 @@ export default function SettingsTab() {
           </View>
         </View>
 
+        {/* Vault Stats section */}
+        <Text style={styles.sectionTitle}>VAULT STORAGE</Text>
+        <View style={styles.section}>
+          <View style={styles.settingRow}>
+            <Ionicons name="images" size={22} color="#FF9500" style={styles.settingIcon} />
+            <Text style={styles.settingLabel}>Photos</Text>
+            <Text style={styles.settingValue}>{fileCounts.photos} files</Text>
+          </View>
+          <View style={styles.divider} />
+          <View style={styles.settingRow}>
+            <Ionicons name="videocam" size={22} color="#FF9500" style={styles.settingIcon} />
+            <Text style={styles.settingLabel}>Videos</Text>
+            <Text style={styles.settingValue}>{fileCounts.videos} files</Text>
+          </View>
+          <View style={styles.divider} />
+          <View style={styles.settingRow}>
+            <Ionicons name="document-text" size={22} color="#FF9500" style={styles.settingIcon} />
+            <Text style={styles.settingLabel}>Documents</Text>
+            <Text style={styles.settingValue}>{fileCounts.documents} files</Text>
+          </View>
+        </View>
+
         {/* Privacy section */}
         <Text style={styles.sectionTitle}>PRIVACY</Text>
         <View style={styles.section}>
@@ -181,7 +208,7 @@ export default function SettingsTab() {
             <View style={styles.settingLabelGroup}>
               <Text style={styles.settingLabel}>Auto-Delete Originals</Text>
               <Text style={styles.settingDescription}>
-                Remove files from gallery after importing
+                Files are always removed from gallery on import
               </Text>
             </View>
             <Switch
@@ -303,6 +330,11 @@ const styles = StyleSheet.create({
     flex: 1,
     fontSize: 16,
     color: '#FFFFFF',
+  },
+  settingValue: {
+    fontSize: 14,
+    color: '#8E8E93',
+    fontWeight: '500',
   },
   settingLabelGroup: {
     flex: 1,
