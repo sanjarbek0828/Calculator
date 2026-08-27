@@ -70,15 +70,24 @@ function indexPath(type: VaultFileType): string {
   return `${VAULT_ROOT}${type}${INDEX_SUFFIX}`;
 }
 
+// In-memory cache so repeat tab visits don't re-read JSON from disk
+const indexCache = new Map<VaultFileType, VaultFile[]>();
+
 async function readIndex(type: VaultFileType): Promise<VaultFile[]> {
   if (Platform.OS === 'web') return [];
+
+  // Return cached value if available
+  if (indexCache.has(type)) return indexCache.get(type)!;
+
   const path = indexPath(type);
   const info = await FileSystem.getInfoAsync(path);
   if (!info.exists) return [];
 
   try {
     const raw = await FileSystem.readAsStringAsync(path);
-    return JSON.parse(raw) as VaultFile[];
+    const parsed = JSON.parse(raw) as VaultFile[];
+    indexCache.set(type, parsed);
+    return parsed;
   } catch {
     return [];
   }
@@ -89,6 +98,7 @@ async function writeIndex(
   files: VaultFile[]
 ): Promise<void> {
   if (Platform.OS === 'web') return;
+  indexCache.set(type, files); // Update cache immediately
   const path = indexPath(type);
   await FileSystem.writeAsStringAsync(path, JSON.stringify(files, null, 2));
 }

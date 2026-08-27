@@ -405,6 +405,37 @@ export default function PhotosTab() {
                 <Text style={styles.viewerMeta}>
                   {formatDate(viewerFile.importedAt)} · {formatBytes(viewerFile.sizeBytes)}
                 </Text>
+                <View style={styles.viewerActions}>
+                  <Pressable
+                    style={styles.viewerActionBtn}
+                    onPress={() => {
+                      handleExport(viewerFile);
+                      setViewerFile(null);
+                    }}
+                  >
+                    <Ionicons name="share-outline" size={18} color="#FF9500" />
+                    <Text style={styles.viewerActionText}>Restore to Gallery</Text>
+                  </Pressable>
+                  <Pressable
+                    style={[styles.viewerActionBtn, styles.viewerDeleteBtn]}
+                    onPress={() => {
+                      Alert.alert('Delete Photo', 'Permanently remove from vault?', [
+                        { text: 'Cancel', style: 'cancel' },
+                        {
+                          text: 'Delete',
+                          style: 'destructive',
+                          onPress: () => {
+                            handleDelete(viewerFile);
+                            setViewerFile(null);
+                          },
+                        },
+                      ]);
+                    }}
+                  >
+                    <Ionicons name="trash-outline" size={18} color="#FF453A" />
+                    <Text style={[styles.viewerActionText, { color: '#FF453A' }]}>Delete</Text>
+                  </Pressable>
+                </View>
               </View>
             </>
           )}
@@ -609,9 +640,9 @@ const styles = StyleSheet.create({
     bottom: 48,
     left: 20,
     right: 20,
-    backgroundColor: 'rgba(0,0,0,0.6)',
-    borderRadius: 12,
-    padding: 14,
+    backgroundColor: 'rgba(0,0,0,0.75)',
+    borderRadius: 16,
+    padding: 16,
   },
   viewerName: {
     fontSize: 15,
@@ -622,5 +653,28 @@ const styles = StyleSheet.create({
     fontSize: 13,
     color: '#8E8E93',
     marginTop: 4,
+    marginBottom: 14,
+  },
+  viewerActions: {
+    flexDirection: 'row',
+    gap: 10,
+  },
+  viewerActionBtn: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 6,
+    paddingVertical: 10,
+    backgroundColor: '#2C2C2E',
+    borderRadius: 10,
+  },
+  viewerDeleteBtn: {
+    backgroundColor: '#3A1C1C',
+  },
+  viewerActionText: {
+    fontSize: 13,
+    fontWeight: '600',
+    color: '#FF9500',
   },
 });
