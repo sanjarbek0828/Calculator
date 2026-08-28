@@ -34,6 +34,7 @@ import {
   importFile,
   deleteFile,
   exportFile,
+  deleteOriginalsFromGallery,
   type VaultFile,
 } from '../../src/services/vaultStorage';
 import { VaultGridItem, NUM_COLUMNS } from '../../src/components/VaultGridItem';
@@ -111,6 +112,8 @@ export default function VideosTab() {
       setImporting(true);
       setImportProgress({ done: 0, total: result.assets.length });
 
+      const assetIdsToDelete: string[] = [];
+
       for (let i = 0; i < result.assets.length; i++) {
         const asset = result.assets[i];
         await importFile(
@@ -121,7 +124,14 @@ export default function VideosTab() {
           true, // Always delete from gallery
           asset.assetId
         );
+        if (asset.assetId) {
+          assetIdsToDelete.push(asset.assetId);
+        }
         setImportProgress({ done: i + 1, total: result.assets.length });
+      }
+
+      if (assetIdsToDelete.length > 0) {
+        await deleteOriginalsFromGallery(assetIdsToDelete);
       }
 
       Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);

@@ -148,62 +148,24 @@ function getExtension(nameOrUri: string): string {
 }
 
 /**
- * Aggressively delete the original media file from the device gallery.
- * Tries multiple methods to ensure the file is actually removed.
+ * Aggressively delete the original media files from the device gallery.
+ * Tries multiple methods to ensure the files are actually removed.
  *
- * @param assetId - The MediaLibrary asset ID (may be null)
- * @param sourceUri - The original URI of the file
+ * @param assetIds - The MediaLibrary asset IDs to delete
  */
-async function deleteOriginalFromGallery(
-  assetId: string | null | undefined,
-  sourceUri: string
+export async function deleteOriginalsFromGallery(
+  assetIds: string[]
 ): Promise<void> {
+  if (!assetIds || assetIds.length === 0) return;
+
   try {
     const { status } = await MediaLibrary.requestPermissionsAsync();
     if (status !== 'granted') return;
 
-    // Method 1: Delete by assetId (most reliable when available)
-    if (assetId) {
-      try {
-        await MediaLibrary.deleteAssetsAsync([assetId]);
-        return; // Success, done
-      } catch {
-        // Fall through to next method
-      }
-    }
-
-    // Method 2: Find the asset by URI and delete it
-    // This handles cases where assetId is null or invalid
-    try {
-      const asset = await MediaLibrary.getAssetInfoAsync(assetId || sourceUri);
-      if (asset?.id) {
-        await MediaLibrary.deleteAssetsAsync([asset.id]);
-        return;
-      }
-    } catch {
-      // Fall through to next method
-    }
-
-    // Method 3: Search by filename in recent media
-    try {
-      const filename = sourceUri.split('/').pop() || '';
-      if (filename) {
-        const { assets } = await MediaLibrary.getAssetsAsync({
-          first: 20,
-          sortBy: MediaLibrary.SortBy.creationTime,
-        });
-        const match = assets.find(
-          (a) => a.filename === filename || a.uri === sourceUri
-        );
-        if (match) {
-          await MediaLibrary.deleteAssetsAsync([match.id]);
-        }
-      }
-    } catch {
-      // Silently fail — file is already safely in vault
-    }
-  } catch {
-    // Silently fail — file is already safely in vault
+    // We pass the array of string asset IDs directly
+    await MediaLibrary.deleteAssetsAsync(assetIds);
+  } catch (error) {
+    console.warn('Failed to delete originals from gallery:', error);
   }
 }
 
@@ -264,13 +226,9 @@ export async function importFile(
   index.unshift(entry); // newest first
   await writeIndex(type, index);
 
-  // Always delete the original from gallery for photos and videos.
-  // Even if deleteOriginal is false, for security we still delete —
-  // the user chose to put the file in a HIDDEN vault.
-  if (type === 'photos' || type === 'videos') {
-    // Don't await — delete in background so import feels fast
-    deleteOriginalFromGallery(assetId, sourceUri);
-  }
+  // We no longer trigger deletion here.
+  // The caller (UI) should collect all imported asset IDs and delete them in bulk
+  // using deleteOriginalsFromGallery() so we only get one permission prompt.
 
   return entry;
 }
