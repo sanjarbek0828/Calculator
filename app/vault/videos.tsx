@@ -1,8 +1,8 @@
 /**
- * vault/videos.tsx — Video vault tab (v2)
+ * vault/videos.tsx — Video vault tab (v3)
  *
  * Premium video vault with:
- * - Gallery import WITHOUT auto-locking (isPickingMedia flag)
+ * - Gallery import WITHOUT auto-locking (pickingMediaCount counter)
  * - ALWAYS deletes original from gallery after import
  * - Multi-select mode for batch delete/export
  * - Full-screen video player with native controls
@@ -75,7 +75,8 @@ export default function VideosTab() {
   const [sortMode, setSortMode] = useState<SortMode>('newest');
   const [showSortMenu, setShowSortMenu] = useState(false);
 
-  const setPickingMedia = useVaultStore((s) => s.setPickingMedia);
+  const incrementPickingMedia = useVaultStore((s) => s.incrementPickingMedia);
+  const decrementPickingMedia = useVaultStore((s) => s.decrementPickingMedia);
 
   // ── Load files ─────────────────────────────────────────────────
   const loadFiles = useCallback(async () => {
@@ -89,18 +90,21 @@ export default function VideosTab() {
     loadFiles();
   }, [loadFiles]);
 
-  // ── Import (lock-prevention) ───────────────────────────────────
+  // ── Import (lock-prevention with counter) ─────────────────────
   const handleImport = useCallback(async () => {
     try {
-      setPickingMedia(true);
+      // Increment BEFORE picker opens — prevents auto-lock on AppState change
+      incrementPickingMedia();
 
       const result = await ImagePicker.launchImageLibraryAsync({
         mediaTypes: ['videos'],
         quality: 1,
         allowsMultipleSelection: true,
+        presentationStyle: ImagePicker.UIImagePickerPresentationStyle.FULL_SCREEN,
       });
 
-      setPickingMedia(false);
+      // Decrement AFTER picker closes
+      decrementPickingMedia();
 
       if (result.canceled || !result.assets?.length) return;
 
@@ -123,11 +127,12 @@ export default function VideosTab() {
       Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
       await loadFiles();
     } catch {
-      setPickingMedia(false);
+      // Always decrement on error
+      decrementPickingMedia();
     } finally {
       setImporting(false);
     }
-  }, [loadFiles, setPickingMedia]);
+  }, [loadFiles, incrementPickingMedia, decrementPickingMedia]);
 
   // ── Multi-select ───────────────────────────────────────────────
   const toggleSelect = useCallback((file: VaultFile) => {
@@ -264,9 +269,24 @@ export default function VideosTab() {
       {importing && (
         <View style={styles.progressBanner}>
           <ActivityIndicator size="small" color="#FF9500" />
-          <Text style={styles.progressText}>
-            Importing {importProgress.done}/{importProgress.total}...
-          </Text>
+          <View style={styles.progressTextContainer}>
+            <Text style={styles.progressText}>
+              Importing {importProgress.done}/{importProgress.total}...
+            </Text>
+            <Text style={styles.progressSubText}>Removing from gallery</Text>
+          </View>
+          <View style={styles.progressBar}>
+            <View
+              style={[
+                styles.progressBarFill,
+                {
+                  width: importProgress.total > 0
+                    ? `${(importProgress.done / importProgress.total) * 100}%`
+                    : '0%',
+                },
+              ]}
+            />
+          </View>
         </View>
       )}
 
@@ -277,7 +297,9 @@ export default function VideosTab() {
         </View>
       ) : files.length === 0 ? (
         <View style={styles.emptyState}>
-          <Ionicons name="videocam-outline" size={64} color="#3A3A3C" />
+          <View style={styles.emptyIconWrapper}>
+            <Ionicons name="videocam-outline" size={56} color="#FF9500" />
+          </View>
           <Text style={styles.emptyText}>No videos yet</Text>
           <Text style={styles.emptySubtext}>Tap + to add videos from gallery</Text>
           <Text style={styles.emptySubtext}>Originals will be auto-deleted</Text>
@@ -345,6 +367,7 @@ export default function VideosTab() {
       >
         <Pressable style={styles.modalOverlay} onPress={() => setShowSortMenu(false)}>
           <View style={styles.sortMenu}>
+            <View style={styles.sortMenuHandle} />
             <Text style={styles.sortMenuTitle}>Sort by</Text>
             {(Object.keys(sortLabels) as SortMode[]).map((mode) => (
               <Pressable
@@ -380,17 +403,22 @@ export default function VideosTab() {
         onRequestClose={() => setViewerFile(null)}
       >
         <View style={styles.viewer}>
-          <Pressable style={styles.viewerClose} onPress={() => setViewerFile(null)}>
-            <Ionicons name="close-circle" size={36} color="rgba(255,255,255,0.8)" />
-          </Pressable>
+          <View style={styles.viewerTopBar}>
+            <Pressable style={styles.viewerClose} onPress={() => setViewerFile(null)}>
+              <Ionicons name="close" size={24} color="#FFF" />
+            </Pressable>
+            {viewerFile && (
+              <Text style={styles.viewerTopTitle} numberOfLines={1}>
+                {viewerFile.originalName}
+              </Text>
+            )}
+            <View style={{ width: 40 }} />
+          </View>
 
           {viewerFile && (
             <>
               <VideoPlayerView uri={viewerFile.uri} />
               <View style={styles.viewerInfo}>
-                <Text style={styles.viewerName} numberOfLines={1}>
-                  {viewerFile.originalName}
-                </Text>
                 <Text style={styles.viewerMeta}>
                   {formatDate(viewerFile.importedAt)} · {formatBytes(viewerFile.sizeBytes)}
                 </Text>
@@ -452,42 +480,49 @@ function VideoPlayerView({ uri }: { uri: string }) {
 }
 
 const styles = StyleSheet.create({
-  container:        { flex: 1, backgroundColor: '#000000' },
-  header:           { paddingHorizontal: 16, paddingTop: 12, paddingBottom: 10 },
-  headerRow:        { flexDirection: 'row', alignItems: 'flex-end', justifyContent: 'space-between' },
-  headerTitle:      { fontSize: 28, fontWeight: '700', color: '#FFFFFF' },
-  headerMeta:       { fontSize: 13, color: '#8E8E93', marginTop: 2 },
-  sortButton:       { flexDirection: 'row', alignItems: 'center', gap: 4, paddingVertical: 6, paddingHorizontal: 10, backgroundColor: '#1C1C1E', borderRadius: 8 },
-  sortButtonText:   { fontSize: 13, color: '#FF9500', fontWeight: '600' },
-  selectHeader:     { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
-  selectAction:     { paddingVertical: 4, paddingHorizontal: 8 },
-  selectActionText: { fontSize: 16, color: '#FF9500', fontWeight: '600' },
-  selectCount:      { fontSize: 16, color: '#FFFFFF', fontWeight: '600' },
-  progressBanner:   { flexDirection: 'row', alignItems: 'center', gap: 10, marginHorizontal: 16, marginBottom: 8, padding: 10, backgroundColor: '#1C1C1E', borderRadius: 10 },
-  progressText:     { color: '#FF9500', fontSize: 14, fontWeight: '600' },
-  grid:             { paddingHorizontal: 2, paddingBottom: 100 },
-  emptyState:       { flex: 1, justifyContent: 'center', alignItems: 'center', gap: 8 },
-  emptyText:        { fontSize: 18, color: '#8E8E93', fontWeight: '600', marginTop: 8 },
-  emptySubtext:     { fontSize: 13, color: '#48484A', textAlign: 'center' },
-  fab:              { position: 'absolute', bottom: 24, right: 20, width: 56, height: 56, borderRadius: 28, backgroundColor: '#FF9500', justifyContent: 'center', alignItems: 'center', elevation: 8, shadowColor: '#FF9500', shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.4, shadowRadius: 8 },
-  fabPressed:       { backgroundColor: '#CC7700', transform: [{ scale: 0.95 }] },
-  batchActions:     { position: 'absolute', bottom: 24, left: 16, right: 16, flexDirection: 'row', gap: 12 },
-  batchBtn:         { flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8, paddingVertical: 14, borderRadius: 14 },
-  batchBtnText:     { fontSize: 16, fontWeight: '600', color: '#FF9500' },
-  modalOverlay:     { flex: 1, backgroundColor: 'rgba(0,0,0,0.5)', justifyContent: 'flex-end' },
-  sortMenu:         { backgroundColor: '#1C1C1E', borderTopLeftRadius: 20, borderTopRightRadius: 20, padding: 20, paddingBottom: 36 },
-  sortMenuTitle:    { fontSize: 13, fontWeight: '600', color: '#8E8E93', textTransform: 'uppercase', letterSpacing: 0.5, marginBottom: 12 },
-  sortMenuItem:     { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingVertical: 14, borderBottomWidth: 0.5, borderBottomColor: '#2C2C2E' },
-  sortMenuItemText: { fontSize: 16, color: '#FFFFFF' },
-  sortMenuItemActive: { color: '#FF9500', fontWeight: '600' },
-  viewer:           { flex: 1, backgroundColor: '#000000', justifyContent: 'center', alignItems: 'center' },
-  viewerClose:      { position: 'absolute', top: 52, right: 16, zIndex: 10 },
-  videoPlayer:      { width: SCREEN_WIDTH, height: SCREEN_HEIGHT * 0.6 },
-  viewerInfo:       { position: 'absolute', bottom: 48, left: 20, right: 20, backgroundColor: 'rgba(0,0,0,0.75)', borderRadius: 16, padding: 16 },
-  viewerName:       { fontSize: 15, fontWeight: '600', color: '#FFFFFF' },
-  viewerMeta:       { fontSize: 13, color: '#8E8E93', marginTop: 4, marginBottom: 14 },
-  viewerActions:    { flexDirection: 'row', gap: 10 },
-  viewerActionBtn:  { flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6, paddingVertical: 10, backgroundColor: '#2C2C2E', borderRadius: 10 },
-  viewerDeleteBtn:  { backgroundColor: '#3A1C1C' },
-  viewerActionText: { fontSize: 13, fontWeight: '600', color: '#FF9500' },
+  container:            { flex: 1, backgroundColor: '#000000' },
+  header:               { paddingHorizontal: 16, paddingTop: 12, paddingBottom: 10 },
+  headerRow:            { flexDirection: 'row', alignItems: 'flex-end', justifyContent: 'space-between' },
+  headerTitle:          { fontSize: 28, fontWeight: '700', color: '#FFFFFF', letterSpacing: -0.5 },
+  headerMeta:           { fontSize: 13, color: '#8E8E93', marginTop: 2 },
+  sortButton:           { flexDirection: 'row', alignItems: 'center', gap: 4, paddingVertical: 6, paddingHorizontal: 10, backgroundColor: '#1C1C1E', borderRadius: 8 },
+  sortButtonText:       { fontSize: 13, color: '#FF9500', fontWeight: '600' },
+  selectHeader:         { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
+  selectAction:         { paddingVertical: 4, paddingHorizontal: 8 },
+  selectActionText:     { fontSize: 16, color: '#FF9500', fontWeight: '600' },
+  selectCount:          { fontSize: 16, color: '#FFFFFF', fontWeight: '600' },
+  progressBanner:       { marginHorizontal: 16, marginBottom: 8, padding: 14, backgroundColor: '#1C1C1E', borderRadius: 14, borderWidth: 1, borderColor: 'rgba(255,149,0,0.2)', gap: 10 },
+  progressTextContainer:{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
+  progressText:         { color: '#FF9500', fontSize: 14, fontWeight: '600' },
+  progressSubText:      { color: '#636366', fontSize: 12 },
+  progressBar:          { height: 3, backgroundColor: '#2C2C2E', borderRadius: 2, overflow: 'hidden' },
+  progressBarFill:      { height: '100%', backgroundColor: '#FF9500', borderRadius: 2 },
+  grid:                 { paddingHorizontal: 2, paddingBottom: 100 },
+  emptyState:           { flex: 1, justifyContent: 'center', alignItems: 'center', gap: 8 },
+  emptyIconWrapper:     { width: 96, height: 96, borderRadius: 24, backgroundColor: 'rgba(255,149,0,0.1)', justifyContent: 'center', alignItems: 'center', marginBottom: 8 },
+  emptyText:            { fontSize: 18, color: '#FFFFFF', fontWeight: '700', marginTop: 4 },
+  emptySubtext:         { fontSize: 13, color: '#48484A', textAlign: 'center' },
+  fab:                  { position: 'absolute', bottom: 24, right: 20, width: 58, height: 58, borderRadius: 29, backgroundColor: '#FF9500', justifyContent: 'center', alignItems: 'center', elevation: 10, shadowColor: '#FF9500', shadowOffset: { width: 0, height: 6 }, shadowOpacity: 0.45, shadowRadius: 12 },
+  fabPressed:           { backgroundColor: '#CC7700', transform: [{ scale: 0.93 }] },
+  batchActions:         { position: 'absolute', bottom: 24, left: 16, right: 16, flexDirection: 'row', gap: 12 },
+  batchBtn:             { flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8, paddingVertical: 15, borderRadius: 16 },
+  batchBtnText:         { fontSize: 16, fontWeight: '600', color: '#FF9500' },
+  modalOverlay:         { flex: 1, backgroundColor: 'rgba(0,0,0,0.6)', justifyContent: 'flex-end' },
+  sortMenu:             { backgroundColor: '#1C1C1E', borderTopLeftRadius: 24, borderTopRightRadius: 24, padding: 20, paddingBottom: 40 },
+  sortMenuHandle:       { width: 36, height: 4, backgroundColor: '#3A3A3C', borderRadius: 2, alignSelf: 'center', marginBottom: 16 },
+  sortMenuTitle:        { fontSize: 13, fontWeight: '600', color: '#8E8E93', textTransform: 'uppercase', letterSpacing: 0.5, marginBottom: 12 },
+  sortMenuItem:         { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingVertical: 16, borderBottomWidth: 0.5, borderBottomColor: '#2C2C2E' },
+  sortMenuItemText:     { fontSize: 16, color: '#FFFFFF' },
+  sortMenuItemActive:   { color: '#FF9500', fontWeight: '600' },
+  viewer:               { flex: 1, backgroundColor: '#000000' },
+  viewerTopBar:         { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 16, paddingTop: 52, paddingBottom: 12 },
+  viewerClose:          { width: 40, height: 40, borderRadius: 20, backgroundColor: 'rgba(255,255,255,0.15)', justifyContent: 'center', alignItems: 'center' },
+  viewerTopTitle:       { flex: 1, fontSize: 15, fontWeight: '600', color: '#FFFFFF', textAlign: 'center', marginHorizontal: 8 },
+  videoPlayer:          { width: SCREEN_WIDTH, height: SCREEN_HEIGHT * 0.55, alignSelf: 'center' },
+  viewerInfo:           { paddingHorizontal: 20, paddingBottom: 40, paddingTop: 16 },
+  viewerMeta:           { fontSize: 13, color: '#8E8E93', marginBottom: 14, textAlign: 'center' },
+  viewerActions:        { flexDirection: 'row', gap: 10 },
+  viewerActionBtn:      { flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6, paddingVertical: 12, backgroundColor: '#1C1C1E', borderRadius: 12 },
+  viewerDeleteBtn:      { backgroundColor: '#2D1515' },
+  viewerActionText:     { fontSize: 14, fontWeight: '600', color: '#FF9500' },
 });

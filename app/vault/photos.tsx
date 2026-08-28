@@ -1,18 +1,18 @@
 /**
- * vault/photos.tsx — Photo vault tab (v2)
+ * vault/photos.tsx — Photo vault tab (v3)
  *
  * Premium photo vault with:
- * - Gallery import WITHOUT auto-locking (isPickingMedia flag)
+ * - Gallery import WITHOUT auto-locking (pickingMediaCount counter)
  * - ALWAYS deletes original from gallery after import
  * - Multi-select mode for batch delete/export
- * - Full-screen pinch-to-zoom viewer
+ * - Full-screen pinch-to-zoom viewer (GestureDetector + Reanimated)
+ * - Double-tap to zoom
  * - Sort by newest/oldest/size
  * - Import progress indicator
- * - Swipe-to-delete gesture
  * - Haptic feedback
  */
 
-import React, { useState, useCallback, useEffect, useRef } from 'react';
+import React, { useState, useCallback, useEffect } from 'react';
 import {
   View,
   FlatList,
@@ -25,13 +25,21 @@ import {
   SafeAreaView,
   Dimensions,
   ActivityIndicator,
-  Animated,
-  ScrollView,
   StatusBar,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import * as ImagePicker from 'expo-image-picker';
 import * as Haptics from 'expo-haptics';
+import Animated, {
+  useAnimatedStyle,
+  useSharedValue,
+  withSpring,
+  withTiming,
+} from 'react-native-reanimated';
+import {
+  Gesture,
+  GestureDetector,
+} from 'react-native-gesture-handler';
 import {
   listFiles,
   importFile,
@@ -67,6 +75,126 @@ function formatDate(ts: number): string {
   return d.toLocaleDateString(undefined, { day: '2-digit', month: 'short', year: 'numeric' });
 }
 
+// ── Pinch-to-zoom Image Viewer ──────────────────────────────────────
+
+interface ZoomableImageProps {
+  uri: string;
+  onClose: () => void;
+}
+
+function ZoomableImage({ uri, onClose }: ZoomableImageProps) {
+  const scale = useSharedValue(1);
+  const savedScale = useSharedValue(1);
+  const translateX = useSharedValue(0);
+  const translateY = useSharedValue(0);
+  const savedTranslateX = useSharedValue(0);
+  const savedTranslateY = useSharedValue(0);
+  const infoOpacity = useSharedValue(1);
+
+  const MIN_SCALE = 1;
+  const MAX_SCALE = 5;
+
+  // Pinch gesture — zoom in/out
+  const pinchGesture = Gesture.Pinch()
+    .onUpdate((e) => {
+      const newScale = savedScale.value * e.scale;
+      scale.value = Math.min(MAX_SCALE, Math.max(MIN_SCALE, newScale));
+    })
+    .onEnd(() => {
+      savedScale.value = scale.value;
+      // Snap back to 1 if below min
+      if (scale.value < MIN_SCALE) {
+        scale.value = withSpring(MIN_SCALE);
+        savedScale.value = MIN_SCALE;
+        translateX.value = withSpring(0);
+        translateY.value = withSpring(0);
+        savedTranslateX.value = 0;
+        savedTranslateY.value = 0;
+      }
+    });
+
+  // Pan gesture — move around when zoomed in
+  const panGesture = Gesture.Pan()
+    .onUpdate((e) => {
+      if (scale.value > 1) {
+        translateX.value = savedTranslateX.value + e.translationX;
+        translateY.value = savedTranslateY.value + e.translationY;
+      }
+    })
+    .onEnd(() => {
+      savedTranslateX.value = translateX.value;
+      savedTranslateY.value = translateY.value;
+
+      // If barely zoomed, snap back to center
+      if (scale.value <= 1.05) {
+        translateX.value = withSpring(0);
+        translateY.value = withSpring(0);
+        savedTranslateX.value = 0;
+        savedTranslateY.value = 0;
+      }
+    });
+
+  // Double-tap gesture — toggle zoom 1x ↔ 2.5x
+  const doubleTapGesture = Gesture.Tap()
+    .numberOfTaps(2)
+    .onEnd((e) => {
+      if (scale.value > 1.5) {
+        // Zoom out to 1x
+        scale.value = withSpring(1);
+        savedScale.value = 1;
+        translateX.value = withSpring(0);
+        translateY.value = withSpring(0);
+        savedTranslateX.value = 0;
+        savedTranslateY.value = 0;
+        infoOpacity.value = withTiming(1);
+      } else {
+        // Zoom in to 2.5x at tap location
+        scale.value = withSpring(2.5);
+        savedScale.value = 2.5;
+        infoOpacity.value = withTiming(0);
+      }
+    });
+
+  // Single tap — toggle info bar visibility
+  const singleTapGesture = Gesture.Tap()
+    .numberOfTaps(1)
+    .onEnd(() => {
+      infoOpacity.value = withTiming(infoOpacity.value > 0.5 ? 0 : 1);
+    });
+
+  const composed = Gesture.Simultaneous(
+    pinchGesture,
+    Gesture.Exclusive(doubleTapGesture, singleTapGesture),
+    panGesture
+  );
+
+  const animatedImageStyle = useAnimatedStyle(() => ({
+    transform: [
+      { scale: scale.value },
+      { translateX: translateX.value },
+      { translateY: translateY.value },
+    ],
+  }));
+
+  const animatedInfoStyle = useAnimatedStyle(() => ({
+    opacity: infoOpacity.value,
+  }));
+
+  return (
+    <GestureDetector gesture={composed}>
+      <Animated.View style={styles.zoomContainer}>
+        <Animated.Image
+          source={{ uri }}
+          style={[styles.viewerImage, animatedImageStyle]}
+          resizeMode="contain"
+        />
+      </Animated.View>
+    </GestureDetector>
+  );
+}
+
+// ── Main Component ───────────────────────────────────────────────────
+
 export default function PhotosTab() {
   const [files, setFiles] = useState<VaultFile[]>([]);
   const [loading, setLoading] = useState(true);
@@ -78,8 +206,8 @@ export default function PhotosTab() {
   const [sortMode, setSortMode] = useState<SortMode>('newest');
   const [showSortMenu, setShowSortMenu] = useState(false);
 
-  const setPickingMedia = useVaultStore((s) => s.setPickingMedia);
-  const autoDelete = useVaultStore((s) => s.autoDeleteOriginal);
+  const incrementPickingMedia = useVaultStore((s) => s.incrementPickingMedia);
+  const decrementPickingMedia = useVaultStore((s) => s.decrementPickingMedia);
 
   // ── Load files ─────────────────────────────────────────────────
   const loadFiles = useCallback(async () => {
@@ -96,17 +224,19 @@ export default function PhotosTab() {
   // ── Import from gallery (with lock-prevention) ─────────────────
   const handleImport = useCallback(async () => {
     try {
-      // Tell the app we are opening the media picker — prevents auto-lock
-      setPickingMedia(true);
+      // Increment counter BEFORE opening picker — prevents vault from locking
+      // when AppState goes 'inactive' due to system picker overlay
+      incrementPickingMedia();
 
       const result = await ImagePicker.launchImageLibraryAsync({
         mediaTypes: ['images'],
         quality: 1,
         allowsMultipleSelection: true,
+        presentationStyle: ImagePicker.UIImagePickerPresentationStyle.FULL_SCREEN,
       });
 
-      // Picker closed — safe to re-enable auto-lock
-      setPickingMedia(false);
+      // Picker closed — safe to decrement counter
+      decrementPickingMedia();
 
       if (result.canceled || !result.assets?.length) return;
 
@@ -129,11 +259,12 @@ export default function PhotosTab() {
       Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
       await loadFiles();
     } catch {
-      setPickingMedia(false);
+      // Ensure counter is always decremented even on error
+      decrementPickingMedia();
     } finally {
       setImporting(false);
     }
-  }, [loadFiles, setPickingMedia]);
+  }, [loadFiles, incrementPickingMedia, decrementPickingMedia]);
 
   // ── Multi-select ───────────────────────────────────────────────
   const toggleSelect = useCallback((file: VaultFile) => {
@@ -234,174 +365,209 @@ export default function PhotosTab() {
 
   return (
     <SafeAreaView style={styles.container}>
-      <StatusBar barStyle="light-content" />
+        <StatusBar barStyle="light-content" />
 
-      {/* Header */}
-      <View style={styles.header}>
+        {/* Header */}
+        <View style={styles.header}>
+          {isSelecting ? (
+            <View style={styles.selectHeader}>
+              <Pressable onPress={cancelSelect} style={styles.selectAction}>
+                <Text style={styles.selectActionText}>Cancel</Text>
+              </Pressable>
+              <Text style={styles.selectCount}>{selectedIds.size} selected</Text>
+              <Pressable onPress={selectAll} style={styles.selectAction}>
+                <Text style={styles.selectActionText}>All</Text>
+              </Pressable>
+            </View>
+          ) : (
+            <View style={styles.headerRow}>
+              <View>
+                <Text style={styles.headerTitle}>Photos</Text>
+                <Text style={styles.headerMeta}>
+                  {files.length} items · {formatBytes(totalSize)}
+                </Text>
+              </View>
+              <Pressable
+                onPress={() => setShowSortMenu(true)}
+                style={styles.sortButton}
+              >
+                <Ionicons name="funnel-outline" size={18} color="#FF9500" />
+                <Text style={styles.sortButtonText}>Sort</Text>
+              </Pressable>
+            </View>
+          )}
+        </View>
+
+        {/* Import progress overlay */}
+        {importing && (
+          <View style={styles.progressBanner}>
+            <ActivityIndicator size="small" color="#FF9500" />
+            <View style={styles.progressTextContainer}>
+              <Text style={styles.progressText}>
+                Importing {importProgress.done}/{importProgress.total}...
+              </Text>
+              <Text style={styles.progressSubText}>Removing from gallery</Text>
+            </View>
+            <View style={styles.progressBar}>
+              <View
+                style={[
+                  styles.progressBarFill,
+                  {
+                    width: importProgress.total > 0
+                      ? `${(importProgress.done / importProgress.total) * 100}%`
+                      : '0%',
+                  },
+                ]}
+              />
+            </View>
+          </View>
+        )}
+
+        {/* Content */}
+        {loading ? (
+          <View style={styles.emptyState}>
+            <ActivityIndicator size="large" color="#FF9500" />
+          </View>
+        ) : files.length === 0 ? (
+          <View style={styles.emptyState}>
+            <View style={styles.emptyIconWrapper}>
+              <Ionicons name="images-outline" size={56} color="#FF9500" />
+            </View>
+            <Text style={styles.emptyText}>No photos yet</Text>
+            <Text style={styles.emptySubtext}>Tap + to add photos from gallery</Text>
+            <Text style={styles.emptySubtext}>Originals will be auto-deleted</Text>
+          </View>
+        ) : (
+          <FlatList
+            data={files}
+            keyExtractor={(item) => item.id}
+            numColumns={NUM_COLUMNS}
+            renderItem={({ item }) => (
+              <VaultGridItem
+                file={item}
+                onPress={handlePress}
+                onLongPress={handleLongPress}
+                onExport={handleExport}
+                onDelete={handleDelete}
+                isSelected={selectedIds.has(item.id)}
+                isSelectMode={isSelecting}
+              />
+            )}
+            contentContainerStyle={styles.grid}
+          />
+        )}
+
+        {/* FAB — Add or Batch action */}
         {isSelecting ? (
-          <View style={styles.selectHeader}>
-            <Pressable onPress={cancelSelect} style={styles.selectAction}>
-              <Text style={styles.selectActionText}>Cancel</Text>
+          <View style={styles.batchActions}>
+            <Pressable
+              style={[styles.batchBtn, { backgroundColor: '#1C1C1E' }]}
+              onPress={handleBatchExport}
+              disabled={selectedIds.size === 0}
+            >
+              <Ionicons name="share-outline" size={22} color="#FF9500" />
+              <Text style={styles.batchBtnText}>Export</Text>
             </Pressable>
-            <Text style={styles.selectCount}>{selectedIds.size} selected</Text>
-            <Pressable onPress={selectAll} style={styles.selectAction}>
-              <Text style={styles.selectActionText}>All</Text>
+            <Pressable
+              style={[styles.batchBtn, { backgroundColor: '#3A1C1C' }]}
+              onPress={handleBatchDelete}
+              disabled={selectedIds.size === 0}
+            >
+              <Ionicons name="trash-outline" size={22} color="#FF453A" />
+              <Text style={[styles.batchBtnText, { color: '#FF453A' }]}>Delete</Text>
             </Pressable>
           </View>
         ) : (
-          <View style={styles.headerRow}>
-            <View>
-              <Text style={styles.headerTitle}>Photos</Text>
-              <Text style={styles.headerMeta}>
-                {files.length} items · {formatBytes(totalSize)}
-              </Text>
-            </View>
-            <Pressable
-              onPress={() => setShowSortMenu(true)}
-              style={styles.sortButton}
-            >
-              <Ionicons name="funnel-outline" size={18} color="#FF9500" />
-              <Text style={styles.sortButtonText}>Sort</Text>
-            </Pressable>
-          </View>
+          <Pressable
+            onPress={handleImport}
+            disabled={importing}
+            style={({ pressed }) => [styles.fab, pressed && styles.fabPressed]}
+          >
+            {importing ? (
+              <ActivityIndicator size="small" color="#FFF" />
+            ) : (
+              <Ionicons name="add" size={28} color="#FFF" />
+            )}
+          </Pressable>
         )}
-      </View>
 
-      {/* Import progress overlay */}
-      {importing && (
-        <View style={styles.progressBanner}>
-          <ActivityIndicator size="small" color="#FF9500" />
-          <Text style={styles.progressText}>
-            Importing {importProgress.done}/{importProgress.total}...
-          </Text>
-        </View>
-      )}
-
-      {/* Content */}
-      {loading ? (
-        <View style={styles.emptyState}>
-          <ActivityIndicator size="large" color="#FF9500" />
-        </View>
-      ) : files.length === 0 ? (
-        <View style={styles.emptyState}>
-          <Ionicons name="images-outline" size={64} color="#3A3A3C" />
-          <Text style={styles.emptyText}>No photos yet</Text>
-          <Text style={styles.emptySubtext}>Tap + to add photos from gallery</Text>
-          <Text style={styles.emptySubtext}>Originals will be auto-deleted</Text>
-        </View>
-      ) : (
-        <FlatList
-          data={files}
-          keyExtractor={(item) => item.id}
-          numColumns={NUM_COLUMNS}
-          renderItem={({ item }) => (
-            <VaultGridItem
-              file={item}
-              onPress={handlePress}
-              onLongPress={handleLongPress}
-              onExport={handleExport}
-              onDelete={handleDelete}
-              isSelected={selectedIds.has(item.id)}
-              isSelectMode={isSelecting}
-            />
-          )}
-          contentContainerStyle={styles.grid}
-        />
-      )}
-
-      {/* FAB — Add or Batch action */}
-      {isSelecting ? (
-        <View style={styles.batchActions}>
-          <Pressable
-            style={[styles.batchBtn, { backgroundColor: '#1C1C1E' }]}
-            onPress={handleBatchExport}
-            disabled={selectedIds.size === 0}
-          >
-            <Ionicons name="share-outline" size={22} color="#FF9500" />
-            <Text style={styles.batchBtnText}>Export</Text>
-          </Pressable>
-          <Pressable
-            style={[styles.batchBtn, { backgroundColor: '#3A1C1C' }]}
-            onPress={handleBatchDelete}
-            disabled={selectedIds.size === 0}
-          >
-            <Ionicons name="trash-outline" size={22} color="#FF453A" />
-            <Text style={[styles.batchBtnText, { color: '#FF453A' }]}>Delete</Text>
-          </Pressable>
-        </View>
-      ) : (
-        <Pressable
-          onPress={handleImport}
-          disabled={importing}
-          style={({ pressed }) => [styles.fab, pressed && styles.fabPressed]}
+        {/* Sort menu modal */}
+        <Modal
+          visible={showSortMenu}
+          transparent
+          animationType="slide"
+          onRequestClose={() => setShowSortMenu(false)}
         >
-          {importing ? (
-            <ActivityIndicator size="small" color="#FFF" />
-          ) : (
-            <Ionicons name="add" size={28} color="#FFF" />
-          )}
-        </Pressable>
-      )}
-
-      {/* Sort menu modal */}
-      <Modal
-        visible={showSortMenu}
-        transparent
-        animationType="slide"
-        onRequestClose={() => setShowSortMenu(false)}
-      >
-        <Pressable style={styles.modalOverlay} onPress={() => setShowSortMenu(false)}>
-          <View style={styles.sortMenu}>
-            <Text style={styles.sortMenuTitle}>Sort by</Text>
-            {(Object.keys(sortLabels) as SortMode[]).map((mode) => (
-              <Pressable
-                key={mode}
-                style={styles.sortMenuItem}
-                onPress={() => {
-                  setSortMode(mode);
-                  setShowSortMenu(false);
-                  Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-                }}
-              >
-                <Text style={[
-                  styles.sortMenuItemText,
-                  sortMode === mode && styles.sortMenuItemActive,
-                ]}>
-                  {sortLabels[mode]}
-                </Text>
-                {sortMode === mode && (
-                  <Ionicons name="checkmark" size={18} color="#FF9500" />
-                )}
-              </Pressable>
-            ))}
-          </View>
-        </Pressable>
-      </Modal>
-
-      {/* Full-screen image viewer modal */}
-      <Modal
-        visible={!!viewerFile}
-        transparent
-        animationType="fade"
-        statusBarTranslucent
-        onRequestClose={() => setViewerFile(null)}
-      >
-        <View style={styles.viewer}>
-          <Pressable style={styles.viewerClose} onPress={() => setViewerFile(null)}>
-            <Ionicons name="close-circle" size={36} color="rgba(255,255,255,0.8)" />
+          <Pressable style={styles.modalOverlay} onPress={() => setShowSortMenu(false)}>
+            <View style={styles.sortMenu}>
+              <View style={styles.sortMenuHandle} />
+              <Text style={styles.sortMenuTitle}>Sort by</Text>
+              {(Object.keys(sortLabels) as SortMode[]).map((mode) => (
+                <Pressable
+                  key={mode}
+                  style={styles.sortMenuItem}
+                  onPress={() => {
+                    setSortMode(mode);
+                    setShowSortMenu(false);
+                    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+                  }}
+                >
+                  <Text style={[
+                    styles.sortMenuItemText,
+                    sortMode === mode && styles.sortMenuItemActive,
+                  ]}>
+                    {sortLabels[mode]}
+                  </Text>
+                  {sortMode === mode && (
+                    <Ionicons name="checkmark" size={18} color="#FF9500" />
+                  )}
+                </Pressable>
+              ))}
+            </View>
           </Pressable>
+        </Modal>
 
-          {viewerFile && (
-            <>
-              <Image
-                source={{ uri: viewerFile.uri }}
-                style={styles.viewerImage}
-                resizeMode="contain"
-              />
-              <View style={styles.viewerInfo}>
-                <Text style={styles.viewerName} numberOfLines={1}>
+        {/* Full-screen pinch-to-zoom image viewer modal */}
+        <Modal
+          visible={!!viewerFile}
+          transparent
+          animationType="fade"
+          statusBarTranslucent
+          onRequestClose={() => setViewerFile(null)}
+        >
+          <View style={styles.viewer}>
+            {/* Close button */}
+            <View style={styles.viewerTopBar}>
+              <Pressable style={styles.viewerClose} onPress={() => setViewerFile(null)}>
+                <Ionicons name="close" size={24} color="#FFF" />
+              </Pressable>
+              {viewerFile && (
+                <Text style={styles.viewerTopTitle} numberOfLines={1}>
                   {viewerFile.originalName}
                 </Text>
+              )}
+              <View style={{ width: 40 }} />
+            </View>
+
+            {/* Zoom hint */}
+            <View style={styles.zoomHint}>
+              <Ionicons name="expand-outline" size={14} color="rgba(255,255,255,0.5)" />
+              <Text style={styles.zoomHintText}>Pinch to zoom · Double-tap to fill</Text>
+            </View>
+
+            {/* Zoomable image */}
+            {viewerFile && (
+              <View style={styles.zoomWrapper}>
+                <ZoomableImage
+                  uri={viewerFile.uri}
+                  onClose={() => setViewerFile(null)}
+                />
+              </View>
+            )}
+
+            {/* Info + actions bar */}
+            {viewerFile && (
+              <View style={styles.viewerInfo}>
                 <Text style={styles.viewerMeta}>
                   {formatDate(viewerFile.importedAt)} · {formatBytes(viewerFile.sizeBytes)}
                 </Text>
@@ -437,10 +603,9 @@ export default function PhotosTab() {
                   </Pressable>
                 </View>
               </View>
-            </>
-          )}
-        </View>
-      </Modal>
+            )}
+          </View>
+        </Modal>
     </SafeAreaView>
   );
 }
@@ -464,6 +629,7 @@ const styles = StyleSheet.create({
     fontSize: 28,
     fontWeight: '700',
     color: '#FFFFFF',
+    letterSpacing: -0.5,
   },
   headerMeta: {
     fontSize: 13,
@@ -504,19 +670,39 @@ const styles = StyleSheet.create({
     fontWeight: '600',
   },
   progressBanner: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 10,
     marginHorizontal: 16,
     marginBottom: 8,
-    padding: 10,
+    padding: 14,
     backgroundColor: '#1C1C1E',
-    borderRadius: 10,
+    borderRadius: 14,
+    borderWidth: 1,
+    borderColor: 'rgba(255,149,0,0.2)',
+    gap: 10,
+  },
+  progressTextContainer: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
   },
   progressText: {
     color: '#FF9500',
     fontSize: 14,
     fontWeight: '600',
+  },
+  progressSubText: {
+    color: '#636366',
+    fontSize: 12,
+  },
+  progressBar: {
+    height: 3,
+    backgroundColor: '#2C2C2E',
+    borderRadius: 2,
+    overflow: 'hidden',
+  },
+  progressBarFill: {
+    height: '100%',
+    backgroundColor: '#FF9500',
+    borderRadius: 2,
   },
   grid: {
     paddingHorizontal: 2,
@@ -528,11 +714,20 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     gap: 8,
   },
+  emptyIconWrapper: {
+    width: 96,
+    height: 96,
+    borderRadius: 24,
+    backgroundColor: 'rgba(255,149,0,0.1)',
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginBottom: 8,
+  },
   emptyText: {
     fontSize: 18,
-    color: '#8E8E93',
-    fontWeight: '600',
-    marginTop: 8,
+    color: '#FFFFFF',
+    fontWeight: '700',
+    marginTop: 4,
   },
   emptySubtext: {
     fontSize: 13,
@@ -543,21 +738,21 @@ const styles = StyleSheet.create({
     position: 'absolute',
     bottom: 24,
     right: 20,
-    width: 56,
-    height: 56,
-    borderRadius: 28,
+    width: 58,
+    height: 58,
+    borderRadius: 29,
     backgroundColor: '#FF9500',
     justifyContent: 'center',
     alignItems: 'center',
-    elevation: 8,
+    elevation: 10,
     shadowColor: '#FF9500',
-    shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.4,
-    shadowRadius: 8,
+    shadowOffset: { width: 0, height: 6 },
+    shadowOpacity: 0.45,
+    shadowRadius: 12,
   },
   fabPressed: {
     backgroundColor: '#CC7700',
-    transform: [{ scale: 0.95 }],
+    transform: [{ scale: 0.93 }],
   },
   batchActions: {
     position: 'absolute',
@@ -573,8 +768,8 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
     gap: 8,
-    paddingVertical: 14,
-    borderRadius: 14,
+    paddingVertical: 15,
+    borderRadius: 16,
   },
   batchBtnText: {
     fontSize: 16,
@@ -584,15 +779,23 @@ const styles = StyleSheet.create({
   // Sort menu
   modalOverlay: {
     flex: 1,
-    backgroundColor: 'rgba(0,0,0,0.5)',
+    backgroundColor: 'rgba(0,0,0,0.6)',
     justifyContent: 'flex-end',
   },
   sortMenu: {
     backgroundColor: '#1C1C1E',
-    borderTopLeftRadius: 20,
-    borderTopRightRadius: 20,
+    borderTopLeftRadius: 24,
+    borderTopRightRadius: 24,
     padding: 20,
-    paddingBottom: 36,
+    paddingBottom: 40,
+  },
+  sortMenuHandle: {
+    width: 36,
+    height: 4,
+    backgroundColor: '#3A3A3C',
+    borderRadius: 2,
+    alignSelf: 'center',
+    marginBottom: 16,
   },
   sortMenuTitle: {
     fontSize: 13,
@@ -606,7 +809,7 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    paddingVertical: 14,
+    paddingVertical: 16,
     borderBottomWidth: 0.5,
     borderBottomColor: '#2C2C2E',
   },
@@ -622,38 +825,66 @@ const styles = StyleSheet.create({
   viewer: {
     flex: 1,
     backgroundColor: '#000000',
+  },
+  viewerTopBar: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingHorizontal: 16,
+    paddingTop: 52,
+    paddingBottom: 12,
+    zIndex: 20,
+  },
+  viewerClose: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    backgroundColor: 'rgba(255,255,255,0.15)',
     justifyContent: 'center',
     alignItems: 'center',
   },
-  viewerClose: {
-    position: 'absolute',
-    top: 52,
-    right: 16,
-    zIndex: 10,
-  },
-  viewerImage: {
-    width: SCREEN_WIDTH,
-    height: SCREEN_HEIGHT * 0.75,
-  },
-  viewerInfo: {
-    position: 'absolute',
-    bottom: 48,
-    left: 20,
-    right: 20,
-    backgroundColor: 'rgba(0,0,0,0.75)',
-    borderRadius: 16,
-    padding: 16,
-  },
-  viewerName: {
+  viewerTopTitle: {
+    flex: 1,
     fontSize: 15,
     fontWeight: '600',
     color: '#FFFFFF',
+    textAlign: 'center',
+    marginHorizontal: 8,
+  },
+  zoomHint: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 5,
+    paddingBottom: 8,
+  },
+  zoomHintText: {
+    fontSize: 12,
+    color: 'rgba(255,255,255,0.4)',
+  },
+  zoomWrapper: {
+    flex: 1,
+  },
+  zoomContainer: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+    overflow: 'hidden',
+  },
+  viewerImage: {
+    width: SCREEN_WIDTH,
+    height: SCREEN_HEIGHT * 0.65,
+  },
+  viewerInfo: {
+    paddingHorizontal: 20,
+    paddingBottom: 40,
+    paddingTop: 16,
   },
   viewerMeta: {
     fontSize: 13,
     color: '#8E8E93',
-    marginTop: 4,
     marginBottom: 14,
+    textAlign: 'center',
   },
   viewerActions: {
     flexDirection: 'row',
@@ -665,15 +896,15 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
     gap: 6,
-    paddingVertical: 10,
-    backgroundColor: '#2C2C2E',
-    borderRadius: 10,
+    paddingVertical: 12,
+    backgroundColor: '#1C1C1E',
+    borderRadius: 12,
   },
   viewerDeleteBtn: {
-    backgroundColor: '#3A1C1C',
+    backgroundColor: '#2D1515',
   },
   viewerActionText: {
-    fontSize: 13,
+    fontSize: 14,
     fontWeight: '600',
     color: '#FF9500',
   },

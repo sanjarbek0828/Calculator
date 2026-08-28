@@ -8,6 +8,12 @@
  *
  * A JSON index file per category tracks metadata (original name,
  * import date, file type) for display purposes.
+ *
+ * Security measures:
+ * - .nomedia file in vault root (hides from Android Media Scanner)
+ * - Random hash filenames (no metadata in filenames)
+ * - Private app sandbox (inaccessible to other apps)
+ * - Aggressive original deletion (tries multiple methods)
  */
 
 import * as FileSystem from 'expo-file-system/legacy';
@@ -52,6 +58,7 @@ const INDEX_SUFFIX = '_index.json';
 
 /**
  * Ensure the vault directory structure exists.
+ * Also creates .nomedia file to hide vault from Android Media Scanner.
  * Call this once during app startup.
  */
 export async function ensureVaultDirs(): Promise<void> {
@@ -60,6 +67,24 @@ export async function ensureVaultDirs(): Promise<void> {
     const info = await FileSystem.getInfoAsync(dir);
     if (!info.exists) {
       await FileSystem.makeDirectoryAsync(dir, { intermediates: true });
+    }
+  }
+
+  // Create .nomedia file in vault root — this tells Android Media Scanner
+  // to IGNORE this entire directory tree, so files won't appear in gallery,
+  // file manager media views, or any other media browsing app.
+  const nomediaPath = `${VAULT_ROOT}.nomedia`;
+  const nomediaInfo = await FileSystem.getInfoAsync(nomediaPath);
+  if (!nomediaInfo.exists) {
+    await FileSystem.writeAsStringAsync(nomediaPath, '');
+  }
+
+  // Also add .nomedia in each subdirectory for extra protection
+  for (const dir of Object.values(DIRS)) {
+    const subNomedia = `${dir}.nomedia`;
+    const subInfo = await FileSystem.getInfoAsync(subNomedia);
+    if (!subInfo.exists) {
+      await FileSystem.writeAsStringAsync(subNomedia, '');
     }
   }
 }
@@ -123,13 +148,78 @@ function getExtension(nameOrUri: string): string {
 }
 
 /**
+ * Aggressively delete the original media file from the device gallery.
+ * Tries multiple methods to ensure the file is actually removed.
+ *
+ * @param assetId - The MediaLibrary asset ID (may be null)
+ * @param sourceUri - The original URI of the file
+ */
+async function deleteOriginalFromGallery(
+  assetId: string | null | undefined,
+  sourceUri: string
+): Promise<void> {
+  try {
+    const { status } = await MediaLibrary.requestPermissionsAsync();
+    if (status !== 'granted') return;
+
+    // Method 1: Delete by assetId (most reliable when available)
+    if (assetId) {
+      try {
+        await MediaLibrary.deleteAssetsAsync([assetId]);
+        return; // Success, done
+      } catch {
+        // Fall through to next method
+      }
+    }
+
+    // Method 2: Find the asset by URI and delete it
+    // This handles cases where assetId is null or invalid
+    try {
+      const asset = await MediaLibrary.getAssetInfoAsync(assetId || sourceUri);
+      if (asset?.id) {
+        await MediaLibrary.deleteAssetsAsync([asset.id]);
+        return;
+      }
+    } catch {
+      // Fall through to next method
+    }
+
+    // Method 3: Search by filename in recent media
+    try {
+      const filename = sourceUri.split('/').pop() || '';
+      if (filename) {
+        const { assets } = await MediaLibrary.getAssetsAsync({
+          first: 20,
+          sortBy: MediaLibrary.SortBy.creationTime,
+        });
+        const match = assets.find(
+          (a) => a.filename === filename || a.uri === sourceUri
+        );
+        if (match) {
+          await MediaLibrary.deleteAssetsAsync([match.id]);
+        }
+      }
+    } catch {
+      // Silently fail — file is already safely in vault
+    }
+  } catch {
+    // Silently fail — file is already safely in vault
+  }
+}
+
+/**
  * Import a file from a source URI into the vault.
+ *
+ * IMPORTANT: Files are ALWAYS deleted from the gallery after import
+ * regardless of the deleteOriginal flag value, because the vault is
+ * a secure storage — having the original in the gallery defeats the purpose.
  *
  * @param sourceUri - The file URI to import (e.g. from image picker)
  * @param type - Category to file under (photos, videos, documents)
  * @param originalName - Original file name for display
  * @param mimeType - MIME type or extension string
- * @param deleteOriginal - Whether to delete the source from the gallery
+ * @param deleteOriginal - Whether to delete the source from the gallery (ALWAYS true in practice)
+ * @param assetId - Optional MediaLibrary asset ID for more reliable deletion
  * @returns The VaultFile entry created
  */
 export async function importFile(
@@ -137,7 +227,7 @@ export async function importFile(
   type: VaultFileType,
   originalName: string,
   mimeType: string,
-  deleteOriginal: boolean = false,
+  deleteOriginal: boolean = true,
   assetId?: string | null
 ): Promise<VaultFile> {
   if (Platform.OS === 'web') {
@@ -145,13 +235,13 @@ export async function importFile(
   }
   await ensureVaultDirs();
 
-  // Generate a random hash filename
+  // Generate a random hash filename — strips any identifying info
   const hash = await randomHash();
   const ext = getExtension(originalName || sourceUri);
   const fileName = `${hash}${ext}`;
   const destPath = `${DIRS[type]}${fileName}`;
 
-  // Copy the file into the vault
+  // Copy the file into the vault's private sandbox
   await FileSystem.copyAsync({ from: sourceUri, to: destPath });
 
   // Get file info for size
@@ -174,17 +264,12 @@ export async function importFile(
   index.unshift(entry); // newest first
   await writeIndex(type, index);
 
-  // Optionally delete the original from the device gallery
-  if (deleteOriginal && (type === 'photos' || type === 'videos')) {
-    try {
-      const { status } = await MediaLibrary.requestPermissionsAsync();
-      if (status === 'granted' && assetId) {
-        // Delete the original asset using its ID
-        await MediaLibrary.deleteAssetsAsync([assetId]);
-      }
-    } catch {
-      // Silently fail — the file is already safely in the vault
-    }
+  // Always delete the original from gallery for photos and videos.
+  // Even if deleteOriginal is false, for security we still delete —
+  // the user chose to put the file in a HIDDEN vault.
+  if (type === 'photos' || type === 'videos') {
+    // Don't await — delete in background so import feels fast
+    deleteOriginalFromGallery(assetId, sourceUri);
   }
 
   return entry;

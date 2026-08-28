@@ -4,6 +4,7 @@
  * Uses a Stack navigator with no headers. Handles:
  * - Routing between calculator, onboarding, and vault
  * - Auto-lock: returns to calculator when app goes to background
+ *   (EXCEPT when media picker is open — uses pickingMediaCount counter)
  * - Screenshot prevention when vault is open
  * - Loading onboarding/auth state on startup
  */
@@ -30,38 +31,56 @@ export default function RootLayout() {
     ensureVaultDirs();
   }, []);
 
-  const isPickingMedia = useVaultStore((s) => s.isPickingMedia);
+  // Use a ref for isPickingMedia so the AppState callback always sees
+  // the latest value without needing to re-subscribe the listener.
   const isPickingMediaRef = useRef(false);
 
-  // Keep a ref in sync so the AppState callback always sees latest value
+  // Subscribe to pickingMediaCount changes and keep ref in sync
+  const pickingMediaCount = useVaultStore((s) => s.pickingMediaCount);
   useEffect(() => {
-    isPickingMediaRef.current = isPickingMedia;
-  }, [isPickingMedia]);
+    isPickingMediaRef.current = pickingMediaCount > 0;
+  }, [pickingMediaCount]);
+
+  // Keep isVaultOpen in a ref too, so the AppState handler always
+  // sees the latest value without re-registering the listener.
+  const isVaultOpenRef = useRef(isVaultOpen);
+  useEffect(() => {
+    isVaultOpenRef.current = isVaultOpen;
+  }, [isVaultOpen]);
 
   // ── Auto-lock: return to calculator when app goes to background ──
   useEffect(() => {
     const subscription = AppState.addEventListener(
       'change',
       (nextState: AppStateStatus) => {
+        const prev = appState.current;
+        appState.current = nextState;
+
+        // Only lock when transitioning FROM active TO background/inactive
         if (
-          appState.current === 'active' &&
+          prev === 'active' &&
           (nextState === 'background' || nextState === 'inactive')
         ) {
-          // Don't lock if user is just picking media from gallery
-          if (isPickingMediaRef.current) return;
+          // CRITICAL: Do NOT lock if user is picking media from gallery.
+          // On iOS, opening the system photo picker causes the app to go
+          // "inactive" briefly. On Android, it may go to "background".
+          // The pickingMediaCount counter tracks this safely.
+          if (isPickingMediaRef.current) {
+            return;
+          }
 
-          // App is going to background — close vault and go to calculator
-          if (isVaultOpen) {
+          // Vault is open and we're going to background — lock it
+          if (isVaultOpenRef.current) {
             closeVault();
             router.replace('/');
           }
         }
-        appState.current = nextState;
       }
     );
 
     return () => subscription.remove();
-  }, [isVaultOpen, closeVault, router]);
+    // Only depend on stable references — closeVault and router
+  }, [closeVault, router]);
 
   // ── Screenshot prevention ─────────────────────────────────────
   useEffect(() => {
