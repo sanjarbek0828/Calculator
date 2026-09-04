@@ -1,8 +1,8 @@
 /**
- * index.tsx — CalculatorScreen (v2 — fully responsive)
+ * index.tsx — CalculatorScreen (v3 — Premium Dark)
  *
- * Uses flex layout instead of fixed margins so it adapts to any screen size.
- * Button grid fills the available space perfectly.
+ * Deep dark gradient background + premium button grid.
+ * Fully responsive flex layout.
  */
 
 import React, { useEffect, useCallback } from 'react';
@@ -42,14 +42,18 @@ export default function CalculatorScreen() {
 
   return (
     <SafeAreaView style={styles.container}>
-      <StatusBar barStyle="light-content" backgroundColor="#000000" />
+      <StatusBar barStyle="light-content" backgroundColor="#0a0a14" />
+
+      {/* Subtle gradient overlay layers */}
+      <View style={styles.gradientTop} />
+      <View style={styles.gradientBottom} />
 
       {/* Display fills all available space above buttons */}
       <View style={styles.displayArea}>
         <CalculatorDisplay display={calc.display} expression={calc.expression} />
       </View>
 
-      {/* Button grid — uses flex so it never overflows */}
+      {/* Button grid */}
       <View style={styles.buttonGrid}>
         <View style={styles.row}>
           <CalculatorButton label={calc.showAC ? 'AC' : 'C'} onPress={calc.showAC ? calc.allClear : calc.clear} variant="special" />
@@ -88,15 +92,32 @@ export default function CalculatorScreen() {
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: '#000000',
+    backgroundColor: '#0a0a14',
+  },
+  gradientTop: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
+    height: '55%',
+    backgroundColor: 'rgba(20,20,40,0.6)',
+    // Creates a subtle vignette from top
+  },
+  gradientBottom: {
+    position: 'absolute',
+    bottom: 0,
+    left: 0,
+    right: 0,
+    height: '50%',
+    backgroundColor: 'rgba(10,10,20,0.4)',
   },
   displayArea: {
     flex: 1,
     justifyContent: 'flex-end',
   },
   buttonGrid: {
-    paddingBottom: 12,
-    paddingHorizontal: 4,
+    paddingBottom: 16,
+    paddingHorizontal: 2,
   },
   row: {
     flexDirection: 'row',
@@ -104,3 +125,4 @@ const styles = StyleSheet.create({
     alignItems: 'center',
   },
 });
+

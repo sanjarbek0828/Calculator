@@ -43,7 +43,7 @@ export default function SettingsTab() {
   const [newPin, setNewPin] = useState('');
   const [confirmPin, setConfirmPin] = useState('');
   const [pinStep, setPinStep] = useState<'old' | 'new' | 'confirm'>('old');
-  const [fileCounts, setFileCounts] = useState<Record<VaultFileType, number>>({ photos: 0, videos: 0, documents: 0 });
+  const [fileCounts, setFileCounts] = useState<Record<VaultFileType, number>>({ photos: 0, videos: 0, documents: 0, apps: 0 });
 
   useEffect(() => {
     getFileCounts().then(setFileCounts);

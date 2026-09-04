@@ -28,6 +28,7 @@ import {
 import { Ionicons } from '@expo/vector-icons';
 import * as ImagePicker from 'expo-image-picker';
 import * as Haptics from 'expo-haptics';
+import * as MediaLibrary from 'expo-media-library';
 import { useVideoPlayer, VideoView } from 'expo-video';
 import {
   listFiles,
@@ -94,6 +95,16 @@ export default function VideosTab() {
   // ── Import (lock-prevention with counter) ─────────────────────
   const handleImport = useCallback(async () => {
     try {
+      // Request MediaLibrary write permission BEFORE opening picker
+      const { status } = await MediaLibrary.requestPermissionsAsync(true);
+      if (status !== 'granted') {
+        Alert.alert(
+          'Permission Required',
+          'Gallery access is needed to import and remove original videos.',
+          [{ text: 'OK' }]
+        );
+      }
+
       // Increment BEFORE picker opens — prevents auto-lock on AppState change
       incrementPickingMedia();
 

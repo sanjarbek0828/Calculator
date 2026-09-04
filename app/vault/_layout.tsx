@@ -1,7 +1,7 @@
 /**
  * vault/_layout.tsx — Tab navigator for the vault
  *
- * Bottom tabs: Photos | Videos | Documents | Settings
+ * Bottom tabs: Photos | Videos | Documents | Apps | Settings
  * Dark theme, custom icons. Never visible from outside the app.
  * Back button returns to calculator with no confirmation.
  *
@@ -36,17 +36,17 @@ export default function VaultLayout() {
         screenOptions={{
           headerShown: false,
           tabBarActiveTintColor: '#FF9500',
-          tabBarInactiveTintColor: '#8E8E93',
+          tabBarInactiveTintColor: '#48484A',
           tabBarStyle: {
-            backgroundColor: '#1C1C1E',
-            borderTopColor: '#2C2C2E',
+            backgroundColor: '#0f0f17',
+            borderTopColor: 'rgba(255,255,255,0.06)',
             borderTopWidth: 0.5,
             paddingBottom: 4,
             paddingTop: 4,
-            height: 56,
+            height: 58,
           },
           tabBarLabelStyle: {
-            fontSize: 11,
+            fontSize: 10,
             fontWeight: '600',
           },
         }}
@@ -79,6 +79,15 @@ export default function VaultLayout() {
           }}
         />
         <Tabs.Screen
+          name="apps"
+          options={{
+            title: 'Apps',
+            tabBarIcon: ({ color, size }) => (
+              <Ionicons name="apps" size={size} color={color} />
+            ),
+          }}
+        />
+        <Tabs.Screen
           name="settings"
           options={{
             title: 'Settings',
@@ -91,3 +100,4 @@ export default function VaultLayout() {
     </GestureHandlerRootView>
   );
 }
+

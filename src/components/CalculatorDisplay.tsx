@@ -1,17 +1,17 @@
 /**
- * CalculatorDisplay.tsx — The calculator screen display area
+ * CalculatorDisplay.tsx — Premium calculator screen display (v3)
  *
- * Shows the expression chain (small, gray) and the current result
- * (large, white). Auto-shrinks font size for long numbers.
+ * - Bold main number with auto-scaling font
+ * - Subtle expression chain above
+ * - Separator line for visual depth
+ * - Gradient-ready container
  */
 
 import React, { useMemo } from 'react';
 import { View, Text, StyleSheet } from 'react-native';
 
 interface Props {
-  /** The current number or result being displayed */
   display: string;
-  /** The expression chain shown above (e.g. "12 + 3 =") */
   expression: string;
 }
 
@@ -19,24 +19,20 @@ export function CalculatorDisplay({ display, expression }: Props) {
   // Auto-scale font size based on display length
   const fontSize = useMemo(() => {
     const len = display.length;
-    if (len <= 6) return 72;
-    if (len <= 9) return 56;
-    if (len <= 12) return 42;
-    if (len <= 15) return 34;
-    return 26;
+    if (len <= 6)  return 82;
+    if (len <= 9)  return 64;
+    if (len <= 12) return 48;
+    if (len <= 15) return 36;
+    return 28;
   }, [display]);
 
-  // Format number with commas for readability (only for integers/simple decimals)
+  // Format number with commas
   const formattedDisplay = useMemo(() => {
     if (display === 'Error') return display;
-
-    // Don't format if it contains 'e' (scientific notation) or ends with '.'
     if (display.includes('e') || display.endsWith('.')) return display;
 
     const parts = display.split('.');
     const intPart = parts[0];
-
-    // Add thousands separators
     const isNegative = intPart.startsWith('-');
     const absInt = isNegative ? intPart.slice(1) : intPart;
     const formatted = absInt.replace(/\B(?=(\d{3})+(?!\d))/g, ',');
@@ -47,12 +43,15 @@ export function CalculatorDisplay({ display, expression }: Props) {
 
   return (
     <View style={styles.container}>
+      {/* Thin accent line */}
+      <View style={styles.accentLine} />
+
       {/* Expression line */}
       <Text style={styles.expression} numberOfLines={1} adjustsFontSizeToFit>
-        {expression}
+        {expression || ' '}
       </Text>
 
-      {/* Main display */}
+      {/* Main display number */}
       <Text
         style={[styles.display, { fontSize }]}
         numberOfLines={1}
@@ -68,17 +67,26 @@ export function CalculatorDisplay({ display, expression }: Props) {
 const styles = StyleSheet.create({
   container: {
     width: '100%',
-    paddingHorizontal: 20,
-    paddingBottom: 12,
+    paddingHorizontal: 24,
+    paddingBottom: 16,
+    paddingTop: 12,
     justifyContent: 'flex-end',
     alignItems: 'flex-end',
-    minHeight: 140,
+    minHeight: 160,
+  },
+  accentLine: {
+    width: '100%',
+    height: 1,
+    backgroundColor: 'rgba(255,255,255,0.06)',
+    marginBottom: 16,
+    borderRadius: 1,
   },
   expression: {
-    fontSize: 24,
-    color: '#8E8E93',
+    fontSize: 22,
+    color: 'rgba(255,149,0,0.65)',
     fontWeight: '400',
-    marginBottom: 4,
+    letterSpacing: 0.3,
+    marginBottom: 6,
     textAlign: 'right',
     width: '100%',
   },
@@ -87,5 +95,7 @@ const styles = StyleSheet.create({
     fontWeight: '300',
     textAlign: 'right',
     width: '100%',
+    letterSpacing: -1,
   },
 });
+

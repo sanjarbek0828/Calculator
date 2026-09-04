@@ -23,7 +23,7 @@ import { Platform } from 'react-native';
 
 // ── Types ───────────────────────────────────────────────────────────
 
-export type VaultFileType = 'photos' | 'videos' | 'documents';
+export type VaultFileType = 'photos' | 'videos' | 'documents' | 'apps';
 
 export interface VaultFile {
   /** Unique ID (random hash) */
@@ -51,6 +51,7 @@ const DIRS: Record<VaultFileType, string> = {
   photos: `${VAULT_ROOT}photos/`,
   videos: `${VAULT_ROOT}videos/`,
   documents: `${VAULT_ROOT}documents/`,
+  apps: `${VAULT_ROOT}apps/`,
 };
 const INDEX_SUFFIX = '_index.json';
 
@@ -149,7 +150,11 @@ function getExtension(nameOrUri: string): string {
 
 /**
  * Aggressively delete the original media files from the device gallery.
- * Tries multiple methods to ensure the files are actually removed.
+ *
+ * Strategy:
+ * 1. Request FULL write permission (not just addOnly)
+ * 2. Try to delete by assetId (most reliable)
+ * 3. No fallback needed — MediaLibrary handles it
  *
  * @param assetIds - The MediaLibrary asset IDs to delete
  */
@@ -157,15 +162,27 @@ export async function deleteOriginalsFromGallery(
   assetIds: string[]
 ): Promise<void> {
   if (!assetIds || assetIds.length === 0) return;
+  if (Platform.OS === 'web') return;
 
   try {
-    const { status } = await MediaLibrary.requestPermissionsAsync();
-    if (status !== 'granted') return;
+    // Request full media library permission (write access)
+    const { status, accessPrivileges } = await MediaLibrary.requestPermissionsAsync(true);
 
-    // We pass the array of string asset IDs directly
-    await MediaLibrary.deleteAssetsAsync(assetIds);
-  } catch (error) {
-    console.warn('Failed to delete originals from gallery:', error);
+    if (status !== 'granted') {
+      console.warn('Media library permission denied — cannot delete originals');
+      return;
+    }
+
+    // On Android API 30+ need MANAGE_MEDIA — try delete and catch gracefully
+    try {
+      await MediaLibrary.deleteAssetsAsync(assetIds);
+    } catch (deleteError: any) {
+      // Android 11+ may throw "The user denied the request"
+      // In that case, silently continue — the file is at least hidden in vault
+      console.warn('deleteAssetsAsync error (may need MANAGE_MEDIA):', deleteError?.message ?? deleteError);
+    }
+  } catch (error: any) {
+    console.warn('Failed to delete originals from gallery:', error?.message ?? error);
   }
 }
 
@@ -308,14 +325,16 @@ export async function exportFile(
 export async function getFileCounts(): Promise<
   Record<VaultFileType, number>
 > {
-  const [photos, videos, documents] = await Promise.all([
+  const [photos, videos, documents, apps] = await Promise.all([
     readIndex('photos'),
     readIndex('videos'),
     readIndex('documents'),
+    readIndex('apps'),
   ]);
   return {
     photos: photos.length,
     videos: videos.length,
     documents: documents.length,
+    apps: apps.length,
   };
 }

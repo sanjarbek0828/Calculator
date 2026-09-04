@@ -30,11 +30,11 @@ import {
 import { Ionicons } from '@expo/vector-icons';
 import * as ImagePicker from 'expo-image-picker';
 import * as Haptics from 'expo-haptics';
+import * as MediaLibrary from 'expo-media-library';
 import Animated, {
   useAnimatedStyle,
   useSharedValue,
   withSpring,
-  withTiming,
 } from 'react-native-reanimated';
 import {
   Gesture,
@@ -84,101 +84,99 @@ interface ZoomableImageProps {
 }
 
 function ZoomableImage({ uri, onClose }: ZoomableImageProps) {
-  const scale = useSharedValue(1);
-  const savedScale = useSharedValue(1);
-  const translateX = useSharedValue(0);
-  const translateY = useSharedValue(0);
-  const savedTranslateX = useSharedValue(0);
-  const savedTranslateY = useSharedValue(0);
-  const infoOpacity = useSharedValue(1);
+  const scale       = useSharedValue(1);
+  const savedScale  = useSharedValue(1);
+  const offsetX     = useSharedValue(0);
+  const savedX      = useSharedValue(0);
+  const offsetY     = useSharedValue(0);
+  const savedY      = useSharedValue(0);
 
   const MIN_SCALE = 1;
-  const MAX_SCALE = 5;
+  const MAX_SCALE = 6;
 
-  // Pinch gesture — zoom in/out
+  // ── Pinch gesture ───────────────────────────────────────────────
   const pinchGesture = Gesture.Pinch()
-    .onUpdate((e) => {
-      const newScale = savedScale.value * e.scale;
-      scale.value = Math.min(MAX_SCALE, Math.max(MIN_SCALE, newScale));
-    })
-    .onEnd(() => {
+    .onBegin(() => {
       savedScale.value = scale.value;
-      // Snap back to 1 if below min
-      if (scale.value < MIN_SCALE) {
-        scale.value = withSpring(MIN_SCALE);
-        savedScale.value = MIN_SCALE;
-        translateX.value = withSpring(0);
-        translateY.value = withSpring(0);
-        savedTranslateX.value = 0;
-        savedTranslateY.value = 0;
-      }
-    });
-
-  // Pan gesture — move around when zoomed in
-  const panGesture = Gesture.Pan()
+    })
     .onUpdate((e) => {
-      if (scale.value > 1) {
-        translateX.value = savedTranslateX.value + e.translationX;
-        translateY.value = savedTranslateY.value + e.translationY;
-      }
+      const next = savedScale.value * e.scale;
+      scale.value = Math.min(MAX_SCALE, Math.max(MIN_SCALE, next));
     })
     .onEnd(() => {
-      savedTranslateX.value = translateX.value;
-      savedTranslateY.value = translateY.value;
-
-      // If barely zoomed, snap back to center
-      if (scale.value <= 1.05) {
-        translateX.value = withSpring(0);
-        translateY.value = withSpring(0);
-        savedTranslateX.value = 0;
-        savedTranslateY.value = 0;
+      if (scale.value < MIN_SCALE) {
+        scale.value   = withSpring(MIN_SCALE, { damping: 20 });
+        offsetX.value = withSpring(0, { damping: 20 });
+        offsetY.value = withSpring(0, { damping: 20 });
+        savedX.value  = 0;
+        savedY.value  = 0;
       }
+      savedScale.value = scale.value;
     });
 
-  // Double-tap gesture — toggle zoom 1x ↔ 2.5x
-  const doubleTapGesture = Gesture.Tap()
-    .numberOfTaps(2)
-    .onEnd((e) => {
-      if (scale.value > 1.5) {
-        // Zoom out to 1x
-        scale.value = withSpring(1);
-        savedScale.value = 1;
-        translateX.value = withSpring(0);
-        translateY.value = withSpring(0);
-        savedTranslateX.value = 0;
-        savedTranslateY.value = 0;
-        infoOpacity.value = withTiming(1);
-      } else {
-        // Zoom in to 2.5x at tap location
-        scale.value = withSpring(2.5);
-        savedScale.value = 2.5;
-        infoOpacity.value = withTiming(0);
-      }
-    });
-
-  // Single tap — toggle info bar visibility
-  const singleTapGesture = Gesture.Tap()
-    .numberOfTaps(1)
+  // ── Pan gesture (only when zoomed) ─────────────────────────────
+  const panGesture = Gesture.Pan()
+    .averageTouches(true)
+    .onBegin(() => {
+      savedX.value = offsetX.value;
+      savedY.value = offsetY.value;
+    })
+    .onUpdate((e) => {
+      if (scale.value <= 1) return;
+      offsetX.value = savedX.value + e.translationX;
+      offsetY.value = savedY.value + e.translationY;
+    })
     .onEnd(() => {
-      infoOpacity.value = withTiming(infoOpacity.value > 0.5 ? 0 : 1);
+      // Snap back if scale is near 1
+      if (scale.value <= 1.05) {
+        offsetX.value = withSpring(0, { damping: 20 });
+        offsetY.value = withSpring(0, { damping: 20 });
+        savedX.value  = 0;
+        savedY.value  = 0;
+      }
     });
 
-  const composed = Gesture.Simultaneous(
-    pinchGesture,
-    Gesture.Exclusive(doubleTapGesture, singleTapGesture),
-    panGesture
+  // ── Double-tap: toggle 1x ↔ 3x ─────────────────────────────────
+  const doubleTap = Gesture.Tap()
+    .numberOfTaps(2)
+    .maxDuration(250)
+    .onEnd(() => {
+      if (scale.value > 1.5) {
+        scale.value   = withSpring(MIN_SCALE, { damping: 15 });
+        offsetX.value = withSpring(0, { damping: 15 });
+        offsetY.value = withSpring(0, { damping: 15 });
+        savedScale.value = MIN_SCALE;
+        savedX.value  = 0;
+        savedY.value  = 0;
+      } else {
+        scale.value  = withSpring(3, { damping: 15 });
+        savedScale.value = 3;
+      }
+    });
+
+  // ── Single tap: close if at 1x ─────────────────────────────────
+  const singleTap = Gesture.Tap()
+    .numberOfTaps(1)
+    .maxDuration(250)
+    .requireExternalGestureToFail(doubleTap)
+    .onEnd(() => {
+      if (scale.value <= 1) {
+        // handled by parent close button
+      }
+    });
+
+  // Compose: pinch + pan run simultaneously; taps are exclusive
+  const composed = Gesture.Race(
+    Gesture.Simultaneous(pinchGesture, panGesture),
+    Gesture.Exclusive(doubleTap, singleTap)
   );
 
-  const animatedImageStyle = useAnimatedStyle(() => ({
+  const imageStyle = useAnimatedStyle(() => ({
     transform: [
       { scale: scale.value },
-      { translateX: translateX.value },
-      { translateY: translateY.value },
+      { translateX: offsetX.value },
+      { translateY: offsetY.value },
     ],
-  }));
-
-  const animatedInfoStyle = useAnimatedStyle(() => ({
-    opacity: infoOpacity.value,
   }));
 
   return (
@@ -186,13 +184,14 @@ function ZoomableImage({ uri, onClose }: ZoomableImageProps) {
       <Animated.View style={styles.zoomContainer}>
         <Animated.Image
           source={{ uri }}
-          style={[styles.viewerImage, animatedImageStyle]}
+          style={[styles.viewerImage, imageStyle]}
           resizeMode="contain"
         />
       </Animated.View>
     </GestureDetector>
   );
 }
+
 
 // ── Main Component ───────────────────────────────────────────────────
 
@@ -225,6 +224,17 @@ export default function PhotosTab() {
   // ── Import from gallery (with lock-prevention) ─────────────────
   const handleImport = useCallback(async () => {
     try {
+      // Request MediaLibrary write permission BEFORE opening picker
+      // This ensures we can delete originals immediately after import
+      const { status } = await MediaLibrary.requestPermissionsAsync(true);
+      if (status !== 'granted') {
+        Alert.alert(
+          'Permission Required',
+          'Gallery access is needed to import and remove original photos.',
+          [{ text: 'OK' }]
+        );
+      }
+
       // Increment counter BEFORE opening picker — prevents vault from locking
       // when AppState goes 'inactive' due to system picker overlay
       incrementPickingMedia();
@@ -275,6 +285,7 @@ export default function PhotosTab() {
       setImporting(false);
     }
   }, [loadFiles, incrementPickingMedia, decrementPickingMedia]);
+
 
   // ── Multi-select ───────────────────────────────────────────────
   const toggleSelect = useCallback((file: VaultFile) => {
