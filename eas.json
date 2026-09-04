@@ -5,16 +5,43 @@
   "build": {
     "development": {
       "developmentClient": true,
-      "distribution": "internal"
+      "distribution": "internal",
+      "cache": {
+        "key": "calculator-dev-v1",
+        "paths": [
+          "~/.gradle/caches",
+          "~/.gradle/wrapper",
+          ".gradle",
+          "android/.gradle"
+        ]
+      }
     },
     "preview": {
       "android": {
         "buildType": "apk"
+      },
+      "cache": {
+        "key": "calculator-preview-v1",
+        "paths": [
+          "~/.gradle/caches",
+          "~/.gradle/wrapper",
+          ".gradle",
+          "android/.gradle"
+        ]
       }
     },
     "production": {
       "android": {
         "buildType": "app-bundle"
+      },
+      "cache": {
+        "key": "calculator-prod-v1",
+        "paths": [
+          "~/.gradle/caches",
+          "~/.gradle/wrapper",
+          ".gradle",
+          "android/.gradle"
+        ]
       }
     }
   },

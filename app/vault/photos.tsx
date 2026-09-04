@@ -46,9 +46,11 @@ import {
   deleteFile,
   exportFile,
   deleteOriginalsFromGallery,
+  findAssetIdByFilename,
   type VaultFile,
 } from '../../src/services/vaultStorage';
 import { VaultGridItem, NUM_COLUMNS } from '../../src/components/VaultGridItem';
+import { MediaPickerModal } from '../../src/components/MediaPickerModal';
 import { useVaultStore } from '../../src/store/vaultStore';
 
 const { width: SCREEN_WIDTH, height: SCREEN_HEIGHT } = Dimensions.get('window');
@@ -205,6 +207,7 @@ export default function PhotosTab() {
   const [isSelecting, setIsSelecting] = useState(false);
   const [sortMode, setSortMode] = useState<SortMode>('newest');
   const [showSortMenu, setShowSortMenu] = useState(false);
+  const [showMediaPicker, setShowMediaPicker] = useState(false);
 
   const incrementPickingMedia = useVaultStore((s) => s.incrementPickingMedia);
   const decrementPickingMedia = useVaultStore((s) => s.decrementPickingMedia);
@@ -221,22 +224,59 @@ export default function PhotosTab() {
     loadFiles();
   }, [loadFiles]);
 
-  // ── Import from gallery (with lock-prevention) ─────────────────
-  const handleImport = useCallback(async () => {
-    try {
-      // Request MediaLibrary write permission BEFORE opening picker
-      // This ensures we can delete originals immediately after import
-      const { status } = await MediaLibrary.requestPermissionsAsync(true);
-      if (status !== 'granted') {
-        Alert.alert(
-          'Permission Required',
-          'Gallery access is needed to import and remove original photos.',
-          [{ text: 'OK' }]
-        );
-      }
+  // ── Import directly from in-app MediaLibrary picker (guaranteed deletion) ──
+  const handleImportAssets = useCallback(
+    async (selectedAssets: MediaLibrary.Asset[]) => {
+      if (!selectedAssets || selectedAssets.length === 0) return;
 
-      // Increment counter BEFORE opening picker — prevents vault from locking
-      // when AppState goes 'inactive' due to system picker overlay
+      // Keep pickingMedia active during import AND Android delete dialog to prevent auto-lock!
+      incrementPickingMedia();
+      setImporting(true);
+      setImportProgress({ done: 0, total: selectedAssets.length });
+
+      const assetIdsToDelete: string[] = [];
+      const urisToDelete: string[] = [];
+
+      try {
+        for (let i = 0; i < selectedAssets.length; i++) {
+          const asset = selectedAssets[i];
+          await importFile(
+            asset.uri,
+            'photos',
+            asset.filename || `photo_${Date.now()}.jpg`,
+            'image/jpeg',
+            true,
+            asset.id
+          );
+          if (asset.id) {
+            assetIdsToDelete.push(asset.id);
+          }
+          if (asset.uri) {
+            urisToDelete.push(asset.uri);
+          }
+          setImportProgress({ done: i + 1, total: selectedAssets.length });
+        }
+
+        // Delete originals from gallery using confirmed MediaLibrary IDs
+        if (assetIdsToDelete.length > 0 || urisToDelete.length > 0) {
+          await deleteOriginalsFromGallery(assetIdsToDelete, urisToDelete);
+        }
+
+        Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+        await loadFiles();
+      } catch (err: any) {
+        console.warn('Import error:', err);
+      } finally {
+        decrementPickingMedia();
+        setImporting(false);
+      }
+    },
+    [loadFiles, incrementPickingMedia, decrementPickingMedia]
+  );
+
+  // ── Fallback: System ImagePicker with intelligent Asset ID resolver ──
+  const handleSystemPickerImport = useCallback(async () => {
+    try {
       incrementPickingMedia();
 
       const result = await ImagePicker.launchImageLibraryAsync({
@@ -246,45 +286,59 @@ export default function PhotosTab() {
         presentationStyle: ImagePicker.UIImagePickerPresentationStyle.FULL_SCREEN,
       });
 
-      // Picker closed — safe to decrement counter
-      decrementPickingMedia();
-
-      if (result.canceled || !result.assets?.length) return;
+      if (result.canceled || !result.assets?.length) {
+        decrementPickingMedia();
+        return;
+      }
 
       setImporting(true);
       setImportProgress({ done: 0, total: result.assets.length });
 
       const assetIdsToDelete: string[] = [];
+      const urisToDelete: string[] = [];
 
       for (let i = 0; i < result.assets.length; i++) {
         const asset = result.assets[i];
+        let assetId = asset.assetId;
+        if (!assetId && asset.fileName) {
+          assetId = await findAssetIdByFilename(asset.fileName, 'photo');
+        }
+
         await importFile(
           asset.uri,
           'photos',
           asset.fileName || `photo_${Date.now()}.jpg`,
           asset.mimeType || 'image/jpeg',
-          true, // Always delete from gallery
-          asset.assetId
+          true,
+          assetId
         );
-        if (asset.assetId) {
-          assetIdsToDelete.push(asset.assetId);
+
+        if (assetId) {
+          assetIdsToDelete.push(assetId);
+        }
+        if (asset.uri) {
+          urisToDelete.push(asset.uri);
         }
         setImportProgress({ done: i + 1, total: result.assets.length });
       }
 
-      if (assetIdsToDelete.length > 0) {
-        await deleteOriginalsFromGallery(assetIdsToDelete);
+      if (assetIdsToDelete.length > 0 || urisToDelete.length > 0) {
+        await deleteOriginalsFromGallery(assetIdsToDelete, urisToDelete);
       }
 
       Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
       await loadFiles();
-    } catch {
-      // Ensure counter is always decremented even on error
-      decrementPickingMedia();
+    } catch (err) {
+      console.warn('System picker import failed:', err);
     } finally {
+      decrementPickingMedia();
       setImporting(false);
     }
   }, [loadFiles, incrementPickingMedia, decrementPickingMedia]);
+
+  const handleImport = useCallback(() => {
+    setShowMediaPicker(true);
+  }, []);
 
 
   // ── Multi-select ───────────────────────────────────────────────
@@ -627,6 +681,15 @@ export default function PhotosTab() {
             )}
           </View>
         </Modal>
+
+        {/* In-app Media Picker modal */}
+        <MediaPickerModal
+          visible={showMediaPicker}
+          mediaType="photos"
+          onClose={() => setShowMediaPicker(false)}
+          onImportAssets={handleImportAssets}
+          onOpenSystemPicker={handleSystemPickerImport}
+        />
     </SafeAreaView>
   );
 }

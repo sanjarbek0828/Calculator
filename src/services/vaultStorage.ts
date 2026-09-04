@@ -152,38 +152,89 @@ function getExtension(nameOrUri: string): string {
  * Aggressively delete the original media files from the device gallery.
  *
  * Strategy:
- * 1. Request FULL write permission (not just addOnly)
- * 2. Try to delete by assetId (most reliable)
- * 3. No fallback needed — MediaLibrary handles it
+ * 1. Request FULL write permission
+ * 2. Try to delete by assetId (most reliable on Android & iOS)
+ * 3. Fallback to direct FileSystem delete if direct file:// path is known
  *
  * @param assetIds - The MediaLibrary asset IDs to delete
+ * @param fallbackUris - Optional array of file/content URIs for fallback deletion
+ * @returns boolean indicating if deletion was completed
  */
 export async function deleteOriginalsFromGallery(
-  assetIds: string[]
-): Promise<void> {
-  if (!assetIds || assetIds.length === 0) return;
-  if (Platform.OS === 'web') return;
+  assetIds: string[],
+  fallbackUris?: string[]
+): Promise<boolean> {
+  const validIds = (assetIds || []).filter((id): id is string => Boolean(id && typeof id === 'string' && id.trim().length > 0));
+  const validUris = (fallbackUris || []).filter((uri): uri is string => Boolean(uri && typeof uri === 'string' && uri.trim().length > 0));
+
+  if (validIds.length === 0 && validUris.length === 0) return false;
+  if (Platform.OS === 'web') return false;
+
+  let anyDeleted = false;
 
   try {
-    // Request full media library permission (write access)
-    const { status, accessPrivileges } = await MediaLibrary.requestPermissionsAsync(true);
-
-    if (status !== 'granted') {
-      console.warn('Media library permission denied — cannot delete originals');
-      return;
+    // 1. Delete via MediaLibrary if we have asset IDs
+    if (validIds.length > 0) {
+      const { status } = await MediaLibrary.requestPermissionsAsync(true);
+      if (status === 'granted') {
+        try {
+          const success = await MediaLibrary.deleteAssetsAsync(validIds);
+          if (success) anyDeleted = true;
+        } catch (deleteError: any) {
+          console.warn('deleteAssetsAsync error:', deleteError?.message ?? deleteError);
+        }
+      }
     }
 
-    // On Android API 30+ need MANAGE_MEDIA — try delete and catch gracefully
-    try {
-      await MediaLibrary.deleteAssetsAsync(assetIds);
-    } catch (deleteError: any) {
-      // Android 11+ may throw "The user denied the request"
-      // In that case, silently continue — the file is at least hidden in vault
-      console.warn('deleteAssetsAsync error (may need MANAGE_MEDIA):', deleteError?.message ?? deleteError);
+    // 2. Fallback: try direct FileSystem delete if external file URI exists
+    if (validUris.length > 0) {
+      for (const uri of validUris) {
+        if (uri.startsWith('file://') && !uri.includes(VAULT_ROOT)) {
+          try {
+            await FileSystem.deleteAsync(uri, { idempotent: true });
+            anyDeleted = true;
+          } catch {
+            // Ignored if protected or content resolver
+          }
+        }
+      }
     }
   } catch (error: any) {
     console.warn('Failed to delete originals from gallery:', error?.message ?? error);
   }
+
+  return anyDeleted;
+}
+
+/**
+ * Search MediaLibrary to find an asset ID by its filename or approximate timestamp.
+ */
+export async function findAssetIdByFilename(
+  filename: string,
+  mediaType?: 'photo' | 'video'
+): Promise<string | null> {
+  if (Platform.OS === 'web' || !filename) return null;
+  try {
+    const { status } = await MediaLibrary.requestPermissionsAsync(true);
+    if (status !== 'granted') return null;
+
+    const types: MediaLibrary.MediaTypeValue[] = mediaType === 'video' ? ['video'] : ['photo'];
+    const res = await MediaLibrary.getAssetsAsync({
+      first: 80,
+      mediaType: types,
+      sortBy: [MediaLibrary.SortBy.creationTime],
+    });
+
+    const cleanTarget = filename.toLowerCase().trim();
+    for (const item of res.assets) {
+      if (item.filename.toLowerCase().trim() === cleanTarget) {
+        return item.id;
+      }
+    }
+  } catch (err) {
+    console.warn('findAssetIdByFilename error:', err);
+  }
+  return null;
 }
 
 /**

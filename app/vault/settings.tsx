@@ -29,6 +29,7 @@ import { changePin } from '../../src/services/pinService';
 import * as Store from '../../src/services/secureStore';
 import { useVaultStore } from '../../src/store/vaultStore';
 import { getFileCounts, type VaultFileType } from '../../src/services/vaultStorage';
+import { getHiddenApps } from '../../src/services/vaultAppsService';
 
 export default function SettingsTab() {
   const router = useRouter();
@@ -44,9 +45,11 @@ export default function SettingsTab() {
   const [confirmPin, setConfirmPin] = useState('');
   const [pinStep, setPinStep] = useState<'old' | 'new' | 'confirm'>('old');
   const [fileCounts, setFileCounts] = useState<Record<VaultFileType, number>>({ photos: 0, videos: 0, documents: 0, apps: 0 });
+  const [hiddenAppsCount, setHiddenAppsCount] = useState(0);
 
   useEffect(() => {
     getFileCounts().then(setFileCounts);
+    getHiddenApps().then((apps) => setHiddenAppsCount(apps.length));
   }, []);
 
   // ── Toggle biometric ──────────────────────────────────────────
@@ -197,6 +200,12 @@ export default function SettingsTab() {
             <Ionicons name="document-text" size={22} color="#FF9500" style={styles.settingIcon} />
             <Text style={styles.settingLabel}>Documents</Text>
             <Text style={styles.settingValue}>{fileCounts.documents} files</Text>
+          </View>
+          <View style={styles.divider} />
+          <View style={styles.settingRow}>
+            <Ionicons name="apps" size={22} color="#FF9500" style={styles.settingIcon} />
+            <Text style={styles.settingLabel}>Hidden Apps</Text>
+            <Text style={styles.settingValue}>{hiddenAppsCount} apps</Text>
           </View>
         </View>
 
