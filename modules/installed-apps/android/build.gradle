@@ -4,13 +4,23 @@ apply plugin: 'kotlin-android'
 group = 'expo.modules.installedapps'
 version = '1.0.0'
 
+def getExtOrDefault(name, defaultValue) {
+  return rootProject.ext.has(name) ? rootProject.ext.get(name) : defaultValue
+}
+
 def expoModulesCorePlugin = new File(project(":expo-modules-core").projectDir.absolutePath, "ExpoModulesCorePlugin.gradle")
-apply from: expoModulesCorePlugin
-applyKotlinExpoModulesCorePlugin()
+if (expoModulesCorePlugin.exists()) {
+  apply from: expoModulesCorePlugin
+  applyKotlinExpoModulesCorePlugin()
+}
 
 android {
+  compileSdk getExtOrDefault('compileSdkVersion', 36)
+
   namespace "expo.modules.installedapps"
   defaultConfig {
+    minSdk getExtOrDefault('minSdkVersion', 24)
+    targetSdk getExtOrDefault('targetSdkVersion', 36)
     versionCode 1
     versionName "1.0.0"
   }

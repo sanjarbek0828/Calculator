@@ -28,17 +28,20 @@ jobs:
 
       - name: Setup Gradle
         uses: gradle/actions/setup-gradle@v4
+        with:
+          cache-read-only: false
+          gradle-home-cache-cleanup: true
 
       - name: Install dependencies
         run: npm install
 
       - name: Prebuild Android project
-        run: npx expo prebuild --platform android
+        run: npx expo prebuild --platform android --no-install
 
       - name: Build Android APK
         run: |
           cd android
-          ./gradlew assembleRelease
+          ./gradlew assembleRelease --build-cache --parallel -Dorg.gradle.jvmargs="-Xmx4096m -XX:MaxMetaspaceSize=1024m"
 
       - name: Create or Update Release
         uses: ncipollo/release-action@v1
