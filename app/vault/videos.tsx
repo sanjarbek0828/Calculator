@@ -87,9 +87,6 @@ export default function VideosTab() {
   const [showSortMenu, setShowSortMenu] = useState(false);
   const [showMediaPicker, setShowMediaPicker] = useState(false);
 
-  const incrementPickingMedia = useVaultStore((s) => s.incrementPickingMedia);
-  const decrementPickingMedia = useVaultStore((s) => s.decrementPickingMedia);
-
   // ── Load files ─────────────────────────────────────────────────
   const loadFiles = useCallback(async () => {
     setLoading(true);
@@ -107,9 +104,8 @@ export default function VideosTab() {
     async (selectedAssets: MediaLibrary.Asset[]) => {
       if (!selectedAssets || selectedAssets.length === 0) return;
 
-      // Keep pickingMedia active & suspend auto-lock during import AND Android delete dialog!
-      useVaultStore.getState().suspendAutoLock(180000);
-      incrementPickingMedia();
+      // Keep media pick active throughout import AND Android delete dialog!
+      useVaultStore.getState().startMediaPick();
       setImporting(true);
       setImportProgress({ done: 0, total: selectedAssets.length });
 
@@ -144,7 +140,7 @@ export default function VideosTab() {
 
         // Delete originals from gallery using confirmed MediaLibrary IDs and Native engine
         if (assetIdsToDelete.length > 0 || urisToDelete.length > 0 || metaToDelete.length > 0) {
-          useVaultStore.getState().suspendAutoLock(120000);
+          useVaultStore.getState().suspendAutoLock(180000);
           await deleteOriginalsFromGallery(assetIdsToDelete, urisToDelete, metaToDelete);
         }
 
@@ -153,18 +149,17 @@ export default function VideosTab() {
       } catch (err: any) {
         console.warn('Video import error:', err);
       } finally {
-        decrementPickingMedia();
+        useVaultStore.getState().endMediaPick(5000);
         setImporting(false);
       }
     },
-    [loadFiles, incrementPickingMedia, decrementPickingMedia]
+    [loadFiles]
   );
 
   // ── Fallback: System ImagePicker with intelligent Asset ID resolver ──
   const handleSystemPickerImport = useCallback(async () => {
     try {
-      useVaultStore.getState().setExternalPickerActive(true);
-      incrementPickingMedia();
+      useVaultStore.getState().startMediaPick();
 
       const result = await ImagePicker.launchImageLibraryAsync({
         mediaTypes: ['videos'],
@@ -174,7 +169,6 @@ export default function VideosTab() {
       });
 
       if (result.canceled || !result.assets?.length) {
-        decrementPickingMedia();
         return;
       }
 
@@ -222,6 +216,7 @@ export default function VideosTab() {
       }
 
       if (assetIdsToDelete.length > 0 || urisToDelete.length > 0 || metaToDelete.length > 0) {
+        useVaultStore.getState().suspendAutoLock(180000);
         await deleteOriginalsFromGallery(assetIdsToDelete, urisToDelete, metaToDelete);
       }
 
@@ -230,13 +225,13 @@ export default function VideosTab() {
     } catch (err) {
       console.warn('System video picker failed:', err);
     } finally {
-      useVaultStore.getState().setExternalPickerActive(false);
-      decrementPickingMedia();
+      useVaultStore.getState().endMediaPick(5000);
       setImporting(false);
     }
-  }, [loadFiles, incrementPickingMedia, decrementPickingMedia]);
+  }, [loadFiles]);
 
   const handleImport = useCallback(async () => {
+    useVaultStore.getState().startMediaPick();
     if (Platform.OS === 'android') {
       const hasAccess = await hasAllFilesAccess();
       if (!hasAccess) {
@@ -252,6 +247,7 @@ export default function VideosTab() {
             {
               text: 'Ruxsat berish',
               onPress: async () => {
+                useVaultStore.getState().startMediaPick();
                 await requestAllFilesAccess();
                 setShowMediaPicker(true);
               },
@@ -618,7 +614,10 @@ export default function VideosTab() {
       <MediaPickerModal
         visible={showMediaPicker}
         mediaType="videos"
-        onClose={() => setShowMediaPicker(false)}
+        onClose={() => {
+          setShowMediaPicker(false);
+          useVaultStore.getState().endMediaPick(4000);
+        }}
         onImportAssets={handleImportAssets}
         onOpenSystemPicker={handleSystemPickerImport}
       />

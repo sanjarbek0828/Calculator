@@ -63,7 +63,7 @@ export function MediaPickerModal({
     setLoading(true);
     try {
       // Suspend auto-lock while Android permission dialog is showing
-      useVaultStore.getState().suspendAutoLock(120000);
+      useVaultStore.getState().startMediaPick();
 
       const { status } = await MediaLibrary.requestPermissionsAsync(true);
       if (status !== 'granted') {
@@ -90,10 +90,15 @@ export function MediaPickerModal({
     }
   }, [visible, mediaType]);
 
+  const handleClose = useCallback(() => {
+    useVaultStore.getState().endMediaPick(4000);
+    onClose();
+  }, [onClose]);
+
   useEffect(() => {
     if (visible) {
       // Suspend auto-lock immediately upon modal opening
-      useVaultStore.getState().suspendAutoLock(120000);
+      useVaultStore.getState().startMediaPick();
       setSelectedIds(new Set());
       loadMedia();
     }
@@ -123,16 +128,16 @@ export function MediaPickerModal({
     const selected = assets.filter((a) => selectedIds.has(a.id));
     setImporting(true);
     // Keep auto-lock suspended throughout file import and gallery deletion dialog
-    useVaultStore.getState().suspendAutoLock(180000);
+    useVaultStore.getState().startMediaPick();
     try {
       await onImportAssets(selected);
-      onClose();
+      handleClose();
     } catch (err: any) {
       Alert.alert('Xatolik', 'Fayllarni import qilishda xatolik yuz berdi: ' + (err?.message ?? err));
     } finally {
       setImporting(false);
     }
-  }, [selectedIds, assets, onImportAssets, onClose]);
+  }, [selectedIds, assets, onImportAssets, handleClose]);
 
   const isVideo = mediaType === 'videos';
 
@@ -141,14 +146,14 @@ export function MediaPickerModal({
       visible={visible}
       animationType="slide"
       presentationStyle="fullScreen"
-      onRequestClose={onClose}
+      onRequestClose={handleClose}
     >
       <SafeAreaView style={styles.container}>
         <StatusBar barStyle="light-content" backgroundColor="#000000" />
 
         {/* Top Header */}
         <View style={styles.header}>
-          <Pressable onPress={onClose} style={styles.headerBtn}>
+          <Pressable onPress={handleClose} style={styles.headerBtn}>
             <Ionicons name="close" size={26} color="#FFFFFF" />
           </Pressable>
 
@@ -265,7 +270,7 @@ export function MediaPickerModal({
           <Pressable
             style={styles.systemPickerBtn}
             onPress={() => {
-              useVaultStore.getState().suspendAutoLock(120000);
+              useVaultStore.getState().startMediaPick();
               onClose();
               onOpenSystemPicker();
             }}

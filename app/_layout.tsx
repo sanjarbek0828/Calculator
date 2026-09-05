@@ -11,7 +11,7 @@
 
 import { useEffect, useRef } from 'react';
 import { AppState, Platform, type AppStateStatus, StatusBar } from 'react-native';
-import { Stack, useRouter, useSegments } from 'expo-router';
+import { Stack, useRouter } from 'expo-router';
 import * as ScreenCapture from 'expo-screen-capture';
 import { useVaultStore, isAutoLockSuspendedSync } from '../src/store/vaultStore';
 import { useVaultAuth } from '../src/hooks/useVaultAuth';
@@ -21,7 +21,6 @@ import { clearVolatileCacheNative } from '../modules/installed-apps';
 
 export default function RootLayout() {
   const router = useRouter();
-  const segments = useSegments();
   const isVaultOpen = useVaultStore((s) => s.isVaultOpen);
   const closeVault = useVaultStore((s) => s.closeVault);
   const { loadAuthPreferences } = useVaultAuth();
@@ -43,23 +42,41 @@ export default function RootLayout() {
 
         if (nextState === 'active') {
           reApplySystemHiding();
+          // If the app was suspended, but the suspension expired while in background:
+          const state = useVaultStore.getState();
+          if (
+            !state.isPickingMedia &&
+            state.pickingMediaCount === 0 &&
+            !state.isExternalPickerActive &&
+            state.autoLockSuspendedUntil > 0 &&
+            Date.now() > state.autoLockSuspendedUntil
+          ) {
+            state.resumeAutoLock();
+            if (state.isVaultOpen) {
+              closeVault();
+              clearVolatileCacheNative().catch(() => {});
+              router.replace('/');
+              return;
+            }
+          }
         }
 
         // On leaving Calculator (Home button, App Switcher, Screen Off, Recents):
-        // Automatically and immediately lock back to Calculator screen.
-        // The ONLY exception is if an external system file picker is explicitly open.
-        const isExternalPicker = useVaultStore.getState().isExternalPickerActive;
-
+        // Automatically and immediately lock back to Calculator screen
+        // UNLESS auto-lock is currently suspended (media picker, camera, permission dialog, import in progress).
         const isLockTransition =
           Platform.OS === 'ios'
             ? prev === 'active' && (nextState === 'background' || nextState === 'inactive')
             : nextState === 'background';
 
-        if (isLockTransition && !isExternalPicker) {
-          if (useVaultStore.getState().isVaultOpen) {
-            closeVault();
-            clearVolatileCacheNative().catch(() => {});
-            router.replace('/');
+        if (isLockTransition) {
+          const isSuspended = isAutoLockSuspendedSync();
+          if (!isSuspended) {
+            if (useVaultStore.getState().isVaultOpen) {
+              closeVault();
+              clearVolatileCacheNative().catch(() => {});
+              router.replace('/');
+            }
           }
         }
       }

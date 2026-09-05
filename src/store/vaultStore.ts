@@ -55,6 +55,10 @@ interface VaultState {
   suspendAutoLock: (durationMs?: number) => void;
   /** Resume auto-lock immediately */
   resumeAutoLock: () => void;
+  /** Start media picking / permission flow — guarantees auto-lock suspension */
+  startMediaPick: () => void;
+  /** End media picking flow with optional grace period (default: 4000ms) */
+  endMediaPick: (graceMs?: number) => void;
 }
 
 export const useVaultStore = create<VaultState>((set, get) => ({
@@ -84,7 +88,7 @@ export const useVaultStore = create<VaultState>((set, get) => ({
       isExternalPickerActive: active,
       isPickingMedia: active,
       pickingMediaCount: active ? Math.max(state.pickingMediaCount, 1) : 0,
-      autoLockSuspendedUntil: active ? Date.now() + 180000 : 0,
+      autoLockSuspendedUntil: active ? Date.now() + 300000 : 0,
     })),
 
   setPickingMedia: (value) =>
@@ -94,11 +98,17 @@ export const useVaultStore = create<VaultState>((set, get) => ({
         return {
           pickingMediaCount: count,
           isPickingMedia: true,
-          autoLockSuspendedUntil: Math.max(state.autoLockSuspendedUntil, Date.now() + 60000),
+          isExternalPickerActive: true,
+          autoLockSuspendedUntil: Math.max(state.autoLockSuspendedUntil, Date.now() + 300000),
         };
       } else {
         const count = Math.max(0, state.pickingMediaCount - 1);
-        return { pickingMediaCount: count, isPickingMedia: count > 0 };
+        return {
+          pickingMediaCount: count,
+          isPickingMedia: count > 0,
+          isExternalPickerActive: count > 0,
+          autoLockSuspendedUntil: count === 0 ? Date.now() + 4000 : state.autoLockSuspendedUntil,
+        };
       }
     }),
 
@@ -108,7 +118,8 @@ export const useVaultStore = create<VaultState>((set, get) => ({
       return {
         pickingMediaCount: count,
         isPickingMedia: true,
-        autoLockSuspendedUntil: Math.max(state.autoLockSuspendedUntil, Date.now() + 60000),
+        isExternalPickerActive: true,
+        autoLockSuspendedUntil: Math.max(state.autoLockSuspendedUntil, Date.now() + 300000),
       };
     }),
 
@@ -118,8 +129,28 @@ export const useVaultStore = create<VaultState>((set, get) => ({
       return {
         pickingMediaCount: count,
         isPickingMedia: count > 0,
-        // Keep a 2-second grace period after decrement so quick transitions don't lock
-        autoLockSuspendedUntil: count === 0 ? Date.now() + 2000 : state.autoLockSuspendedUntil,
+        isExternalPickerActive: count > 0,
+        // Keep a 4-second grace period after decrement so quick window transitions don't lock
+        autoLockSuspendedUntil: count === 0 ? Date.now() + 4000 : state.autoLockSuspendedUntil,
+      };
+    }),
+
+  startMediaPick: () =>
+    set((state) => ({
+      isExternalPickerActive: true,
+      isPickingMedia: true,
+      pickingMediaCount: state.pickingMediaCount + 1,
+      autoLockSuspendedUntil: Date.now() + 300000,
+    })),
+
+  endMediaPick: (graceMs = 4000) =>
+    set((state) => {
+      const count = Math.max(0, state.pickingMediaCount - 1);
+      return {
+        pickingMediaCount: count,
+        isPickingMedia: count > 0,
+        isExternalPickerActive: count > 0,
+        autoLockSuspendedUntil: count === 0 ? Date.now() + graceMs : state.autoLockSuspendedUntil,
       };
     }),
 
@@ -134,6 +165,7 @@ export const useVaultStore = create<VaultState>((set, get) => ({
     set({
       autoLockSuspendedUntil: 0,
       isPickingMedia: false,
+      isExternalPickerActive: false,
       pickingMediaCount: 0,
     }),
 }));
@@ -145,7 +177,9 @@ export const useVaultStore = create<VaultState>((set, get) => ({
 export function isAutoLockSuspendedSync(): boolean {
   const state = useVaultStore.getState();
   if (state.isExternalPickerActive) return true;
-  if (state.pickingMediaCount > 0 && Date.now() < state.autoLockSuspendedUntil) return true;
+  if (state.isPickingMedia) return true;
+  if (state.pickingMediaCount > 0) return true;
+  if (Date.now() < state.autoLockSuspendedUntil) return true;
   return false;
 }
 

@@ -388,9 +388,7 @@ export default function AppsTab() {
   // ── Import APK / App Document ──────────────────────────────────
   const handleImportApk = useCallback(async () => {
     try {
-      useVaultStore.getState().setExternalPickerActive(true);
-      useVaultStore.getState().suspendAutoLock(120000);
-      useVaultStore.getState().incrementPickingMedia();
+      useVaultStore.getState().startMediaPick();
 
       const result = await DocumentPicker.getDocumentAsync({
         type: '*/*',
@@ -415,8 +413,7 @@ export default function AppsTab() {
     } catch {
       Alert.alert('Xatolik', 'Faylni import qilib bo\'lmadi.');
     } finally {
-      useVaultStore.getState().decrementPickingMedia();
-      useVaultStore.getState().setExternalPickerActive(false);
+      useVaultStore.getState().endMediaPick(5000);
       setLoading(false);
     }
   }, [loadData]);
@@ -638,7 +635,7 @@ export default function AppsTab() {
                     {item.isInstalled === false ? (
                       <View style={styles.uninstalledBadge}>
                         <Ionicons name="alert-circle" size={10} color="#FF9F0A" />
-                        <Text style={styles.uninstalledBadgeText}>Telefonda o'chirilgan</Text>
+                        <Text style={styles.uninstalledBadgeText}>{"Telefonda o'chirilgan"}</Text>
                       </View>
                     ) : item.isSystemHidden ? (
                       <View style={styles.systemHiddenBadge}>
@@ -667,7 +664,7 @@ export default function AppsTab() {
                       onPress={() => handleInstallVaultApk(item.apkPath!, item.appName)}
                     >
                       <Ionicons name="download" size={14} color="#000" />
-                      <Text style={styles.reinstallBtnText}>O'rnatish</Text>
+                      <Text style={styles.reinstallBtnText}>{"O'rnatish"}</Text>
                     </Pressable>
                   ) : (
                     <Pressable
@@ -714,7 +711,7 @@ export default function AppsTab() {
                   onPress={() => handleInstallVaultApk(item.uri, item.originalName)}
                 >
                   <Ionicons name="download" size={14} color="#000" />
-                  <Text style={styles.installApkBtnText}>O'rnatish</Text>
+                  <Text style={styles.installApkBtnText}>{"O'rnatish"}</Text>
                 </Pressable>
                 <Pressable
                   onPress={() => {
@@ -993,7 +990,7 @@ export default function AppsTab() {
                     <View style={[styles.methodBadge, { backgroundColor: '#3ddc84' }]}>
                       <Text style={[styles.methodBadgeText, { color: '#000' }]}>ZAXIRADAN TIKLASH</Text>
                     </View>
-                    <Text style={styles.guideCardTitle}>Ilovani Qayta O'rnatish</Text>
+                    <Text style={styles.guideCardTitle}>{"Ilovani Qayta O'rnatish"}</Text>
                   </View>
                   <Text style={styles.guideCardDesc}>
                     {"Bu ilova telefondan o'chirilgan, lekin uning to'liq APK fayli Calculator ichida xavfsiz saqlangan. 1 bosishda qayta o'rnatishingiz mumkin."}
