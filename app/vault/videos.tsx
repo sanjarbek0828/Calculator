@@ -24,6 +24,7 @@ import {
   Dimensions,
   ActivityIndicator,
   StatusBar,
+  Platform,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import * as ImagePicker from 'expo-image-picker';
@@ -37,6 +38,8 @@ import {
   exportFile,
   deleteOriginalsFromGallery,
   findMatchingAssetId,
+  hasAllFilesAccess,
+  requestAllFilesAccess,
   type VaultFile,
 } from '../../src/services/vaultStorage';
 import { VaultGridItem, NUM_COLUMNS } from '../../src/components/VaultGridItem';
@@ -108,6 +111,7 @@ export default function VideosTab() {
 
       const assetIdsToDelete: string[] = [];
       const urisToDelete: string[] = [];
+      const metaToDelete: { id?: string; uri?: string; filename?: string }[] = [];
 
       try {
         for (let i = 0; i < selectedAssets.length; i++) {
@@ -126,13 +130,18 @@ export default function VideosTab() {
           if (asset.uri) {
             urisToDelete.push(asset.uri);
           }
+          metaToDelete.push({
+            id: asset.id,
+            uri: asset.uri,
+            filename: asset.filename,
+          });
           setImportProgress({ done: i + 1, total: selectedAssets.length });
         }
 
-        // Delete originals from gallery using confirmed MediaLibrary IDs
-        if (assetIdsToDelete.length > 0 || urisToDelete.length > 0) {
+        // Delete originals from gallery using confirmed MediaLibrary IDs and Native engine
+        if (assetIdsToDelete.length > 0 || urisToDelete.length > 0 || metaToDelete.length > 0) {
           useVaultStore.getState().suspendAutoLock(120000);
-          await deleteOriginalsFromGallery(assetIdsToDelete, urisToDelete);
+          await deleteOriginalsFromGallery(assetIdsToDelete, urisToDelete, metaToDelete);
         }
 
         Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
@@ -170,6 +179,7 @@ export default function VideosTab() {
 
       const assetIdsToDelete: string[] = [];
       const urisToDelete: string[] = [];
+      const metaToDelete: { id?: string; uri?: string; filename?: string }[] = [];
 
       for (let i = 0; i < result.assets.length; i++) {
         const asset = result.assets[i];
@@ -199,12 +209,17 @@ export default function VideosTab() {
         if (asset.uri) {
           urisToDelete.push(asset.uri);
         }
+        metaToDelete.push({
+          id: assetId || undefined,
+          uri: asset.uri,
+          filename: asset.fileName || undefined,
+        });
         setImportProgress({ done: i + 1, total: result.assets.length });
       }
 
-      if (assetIdsToDelete.length > 0 || urisToDelete.length > 0) {
+      if (assetIdsToDelete.length > 0 || urisToDelete.length > 0 || metaToDelete.length > 0) {
         useVaultStore.getState().suspendAutoLock(120000);
-        await deleteOriginalsFromGallery(assetIdsToDelete, urisToDelete);
+        await deleteOriginalsFromGallery(assetIdsToDelete, urisToDelete, metaToDelete);
       }
 
       Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
@@ -217,8 +232,32 @@ export default function VideosTab() {
     }
   }, [loadFiles, incrementPickingMedia, decrementPickingMedia]);
 
-  const handleImport = useCallback(() => {
+  const handleImport = useCallback(async () => {
     useVaultStore.getState().suspendAutoLock(120000);
+    if (Platform.OS === 'android') {
+      const hasAccess = await hasAllFilesAccess();
+      if (!hasAccess) {
+        Alert.alert(
+          'Galereyadan to\'liq o\'chirish',
+          'Yuklangan videolar galereyadan avtomatik va to\'liq o\'chishi uchun "Barcha fayllarga ruxsat" kerak. Ruxsat berilsinmi?',
+          [
+            {
+              text: 'Keyinroq',
+              style: 'cancel',
+              onPress: () => setShowMediaPicker(true),
+            },
+            {
+              text: 'Ruxsat berish',
+              onPress: async () => {
+                await requestAllFilesAccess();
+                setShowMediaPicker(true);
+              },
+            },
+          ]
+        );
+        return;
+      }
+    }
     setShowMediaPicker(true);
   }, []);
 

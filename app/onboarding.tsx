@@ -1,14 +1,14 @@
 /**
- * onboarding.tsx — First-launch PIN setup
+ * onboarding.tsx — First-launch PIN setup & Automated Permission Request
  *
- * Appears only on first launch. Asks the user to set a 4-6 digit
- * vault PIN, then confirm it. The PIN is hashed and stored securely.
- *
- * Styled to look like a generic "calculator first-time setup" screen
- * so that anyone glancing at the phone won't suspect a vault.
+ * Appears only on first launch.
+ * 1. Automatically requests necessary storage & media permissions on entry.
+ * 2. Asks user to set 4-6 digit vault PIN.
+ * 3. Confirms PIN and checks All Files Access (MANAGE_EXTERNAL_STORAGE) for Android 14.
+ * 4. Ensures uploaded photos/videos can be deleted from gallery seamlessly.
  */
 
-import React, { useState, useCallback, useRef } from 'react';
+import React, { useState, useCallback, useRef, useEffect } from 'react';
 import {
   View,
   Text,
@@ -16,14 +16,22 @@ import {
   SafeAreaView,
   Pressable,
   Animated,
+  Platform,
+  ScrollView,
 } from 'react-native';
 import { useRouter } from 'expo-router';
+import { Ionicons } from '@expo/vector-icons';
 import * as Haptics from 'expo-haptics';
 import { storePin } from '../src/services/pinService';
 import { setOnboarded } from '../src/services/secureStore';
 import { useVaultStore } from '../src/store/vaultStore';
+import {
+  requestInitialPermissions,
+  hasAllFilesAccess,
+  requestAllFilesAccess,
+} from '../src/services/vaultStorage';
 
-type Step = 'create' | 'confirm';
+type Step = 'create' | 'confirm' | 'permissions';
 
 export default function OnboardingScreen() {
   const router = useRouter();
@@ -33,10 +41,20 @@ export default function OnboardingScreen() {
   const [pin, setPin] = useState('');
   const [firstPin, setFirstPin] = useState('');
   const [error, setError] = useState('');
+  const [allFilesGranted, setAllFilesGranted] = useState(false);
   const shakeAnim = useRef(new Animated.Value(0)).current;
 
   const maxDigits = 6;
   const minDigits = 4;
+
+  // ── Automatically request media permissions on initial entry ──
+  useEffect(() => {
+    (async () => {
+      useVaultStore.getState().suspendAutoLock(120000);
+      const res = await requestInitialPermissions();
+      setAllFilesGranted(res.allFilesGranted);
+    })();
+  }, []);
 
   // ── Shake animation for errors ────────────────────────────────
   const shake = useCallback(() => {
@@ -66,24 +84,30 @@ export default function OnboardingScreen() {
     setError('');
   }, []);
 
-  // ── Submit ─────────────────────────────────────────────────────
+  // ── Finish onboarding ──────────────────────────────────────────
+  const finishOnboarding = useCallback(async () => {
+    await setOnboarded(true);
+    setOnboardedState(true);
+    Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+    router.replace('/');
+  }, [router, setOnboardedState]);
+
+  // ── Submit PIN ─────────────────────────────────────────────────
   const submit = useCallback(async () => {
     if (pin.length < minDigits) {
-      setError(`PIN must be at least ${minDigits} digits`);
+      setError(`PIN kamida ${minDigits} xonali bo'lishi kerak`);
       shake();
       return;
     }
 
     if (step === 'create') {
-      // Move to confirmation
       setFirstPin(pin);
       setPin('');
       setStep('confirm');
       Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
-    } else {
-      // Confirm step
+    } else if (step === 'confirm') {
       if (pin !== firstPin) {
-        setError('PINs do not match. Try again.');
+        setError('PIN mos kelmadi. Qaytadan urinib ko\'ring.');
         setPin('');
         shake();
         return;
@@ -91,18 +115,102 @@ export default function OnboardingScreen() {
 
       // PINs match — hash and store
       await storePin(pin);
-      await setOnboarded(true);
-      setOnboardedState(true);
-      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
-      router.replace('/');
-    }
-  }, [pin, step, firstPin, shake, router, setOnboardedState]);
 
-  const title = step === 'create' ? 'Set Your PIN' : 'Confirm Your PIN';
+      // Check if All Files Access is granted on Android 11+ / Android 14
+      if (Platform.OS === 'android') {
+        const hasAccess = await hasAllFilesAccess();
+        setAllFilesGranted(hasAccess);
+        if (!hasAccess) {
+          setStep('permissions');
+          return;
+        }
+      }
+
+      await finishOnboarding();
+    }
+  }, [pin, step, firstPin, shake, finishOnboarding]);
+
+  // ── Request All Files Permission in Permissions step ───────────
+  const handleRequestAllFiles = useCallback(async () => {
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+    useVaultStore.getState().suspendAutoLock(120000);
+    await requestAllFilesAccess();
+
+    // Check again after user returns
+    setTimeout(async () => {
+      const has = await hasAllFilesAccess();
+      setAllFilesGranted(has);
+    }, 1500);
+  }, []);
+
+  // ── Render Permissions Step ────────────────────────────────────
+  if (step === 'permissions') {
+    return (
+      <SafeAreaView style={styles.container}>
+        <ScrollView contentContainerStyle={styles.scrollContent}>
+          <View style={styles.permIconWrapper}>
+            <Ionicons name="shield-checkmark" size={64} color="#FF9500" />
+          </View>
+
+          <Text style={styles.permTitle}>Kerakli Ruxsatlar</Text>
+          <Text style={styles.permSub}>
+            {"Calculatorga yuklangan rasm va videolar telefondan to'liq o'chishi va faqat ilova ichida qolishi uchun quyidagi ruxsat talab qilinadi."}
+          </Text>
+
+          {/* Feature highlights */}
+          <View style={styles.permCard}>
+            <View style={styles.permRow}>
+              <Ionicons name="images-outline" size={24} color="#FF9500" style={styles.permRowIcon} />
+              <View style={styles.permRowText}>
+                <Text style={styles.permRowTitle}>Galereya ruxsati</Text>
+                <Text style={styles.permRowDesc}>Rasmlar va videolarni tanlash uchun</Text>
+              </View>
+              <Ionicons name="checkmark-circle" size={24} color="#34C759" />
+            </View>
+
+            <View style={styles.divider} />
+
+            <View style={styles.permRow}>
+              <Ionicons name="folder-open-outline" size={24} color="#FF9500" style={styles.permRowIcon} />
+              <View style={styles.permRowText}>
+                <Text style={styles.permRowTitle}>Barcha fayllarga ruxsat (Android 14)</Text>
+                <Text style={styles.permRowDesc}>
+                  {"Yuklangan asl fayllarni galereyadan avtomatik o'chirish uchun zarur"}
+                </Text>
+              </View>
+              {allFilesGranted ? (
+                <Ionicons name="checkmark-circle" size={24} color="#34C759" />
+              ) : (
+                <Pressable style={styles.grantBtn} onPress={handleRequestAllFiles}>
+                  <Text style={styles.grantBtnText}>Yoqish</Text>
+                </Pressable>
+              )}
+            </View>
+          </View>
+
+          {!allFilesGranted && (
+            <Pressable style={styles.fullGrantBtn} onPress={handleRequestAllFiles}>
+              <Ionicons name="lock-open-outline" size={20} color="#000000" style={{ marginRight: 8 }} />
+              <Text style={styles.fullGrantBtnText}>Barcha fayllarga ruxsat berish</Text>
+            </Pressable>
+          )}
+
+          <Pressable style={styles.continueBtn} onPress={finishOnboarding}>
+            <Text style={styles.continueBtnText}>
+              {allFilesGranted ? 'Kalkulyatorni boshlash' : 'Davom etish'}
+            </Text>
+          </Pressable>
+        </ScrollView>
+      </SafeAreaView>
+    );
+  }
+
+  // ── Render PIN Setup Step ──────────────────────────────────────
+  const title = step === 'create' ? 'PIN Kod O\'rnatish' : 'PIN Kodni Tasdiqlang';
   const subtitle =
     step === 'create'
-      ? 'Enter a 4-6 digit PIN'
-      : 'Re-enter your PIN to confirm';
+      ? 'Kalkulyator uchun 4-6 xonali maxfiy PIN kiriting'
+      : 'Tasdiqlash uchun PIN kodni qayta kiriting';
 
   return (
     <SafeAreaView style={styles.container}>
@@ -173,7 +281,7 @@ export default function OnboardingScreen() {
         ]}
       >
         <Text style={styles.submitText}>
-          {step === 'create' ? 'Next' : 'Done'}
+          {step === 'create' ? 'Keyingisi' : 'Tayyor'}
         </Text>
       </Pressable>
     </SafeAreaView>
@@ -188,20 +296,29 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     paddingHorizontal: 24,
   },
+  scrollContent: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: 32,
+    paddingHorizontal: 16,
+  },
   header: {
     alignItems: 'center',
     marginBottom: 32,
   },
   title: {
-    fontSize: 28,
+    fontSize: 26,
     fontWeight: '700',
     color: '#FFFFFF',
     marginBottom: 8,
+    textAlign: 'center',
   },
   subtitle: {
-    fontSize: 16,
+    fontSize: 15,
     color: '#8E8E93',
     fontWeight: '400',
+    textAlign: 'center',
+    paddingHorizontal: 16,
   },
   dotsContainer: {
     flexDirection: 'row',
@@ -228,6 +345,7 @@ const styles = StyleSheet.create({
     fontSize: 14,
     height: 20,
     marginBottom: 16,
+    textAlign: 'center',
   },
   errorSpacer: {
     height: 20,
@@ -264,18 +382,124 @@ const styles = StyleSheet.create({
     backgroundColor: '#FF9500',
     paddingVertical: 16,
     paddingHorizontal: 48,
-    borderRadius: 12,
-    minWidth: 200,
+    borderRadius: 14,
+    minWidth: 220,
     alignItems: 'center',
   },
   submitDisabled: {
-    backgroundColor: '#3A3A3C',
+    backgroundColor: '#2C2C2E',
   },
   submitPressed: {
     backgroundColor: '#CC7700',
   },
   submitText: {
     fontSize: 18,
+    fontWeight: '600',
+    color: '#FFFFFF',
+  },
+
+  // ── Permissions step styles ──
+  permIconWrapper: {
+    width: 100,
+    height: 100,
+    borderRadius: 50,
+    backgroundColor: 'rgba(255, 149, 0, 0.12)',
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginBottom: 20,
+    borderWidth: 1,
+    borderColor: 'rgba(255, 149, 0, 0.3)',
+  },
+  permTitle: {
+    fontSize: 24,
+    fontWeight: '700',
+    color: '#FFFFFF',
+    marginBottom: 10,
+    textAlign: 'center',
+  },
+  permSub: {
+    fontSize: 14,
+    color: '#A0A0A5',
+    lineHeight: 20,
+    textAlign: 'center',
+    marginBottom: 24,
+    paddingHorizontal: 8,
+  },
+  permCard: {
+    width: '100%',
+    backgroundColor: '#161618',
+    borderRadius: 16,
+    padding: 18,
+    borderWidth: 1,
+    borderColor: '#2C2C2E',
+    marginBottom: 20,
+  },
+  permRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingVertical: 8,
+  },
+  permRowIcon: {
+    marginRight: 14,
+  },
+  permRowText: {
+    flex: 1,
+    marginRight: 10,
+  },
+  permRowTitle: {
+    fontSize: 15,
+    fontWeight: '600',
+    color: '#FFFFFF',
+    marginBottom: 3,
+  },
+  permRowDesc: {
+    fontSize: 12,
+    color: '#8E8E93',
+    lineHeight: 16,
+  },
+  divider: {
+    height: 1,
+    backgroundColor: '#2C2C2E',
+    marginVertical: 12,
+  },
+  grantBtn: {
+    backgroundColor: 'rgba(255, 149, 0, 0.2)',
+    paddingHorizontal: 14,
+    paddingVertical: 8,
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: '#FF9500',
+  },
+  grantBtnText: {
+    fontSize: 13,
+    fontWeight: '600',
+    color: '#FF9500',
+  },
+  fullGrantBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#FF9500',
+    width: '100%',
+    paddingVertical: 16,
+    borderRadius: 14,
+    marginBottom: 12,
+  },
+  fullGrantBtnText: {
+    fontSize: 16,
+    fontWeight: '700',
+    color: '#000000',
+  },
+  continueBtn: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#2C2C2E',
+    width: '100%',
+    paddingVertical: 15,
+    borderRadius: 14,
+  },
+  continueBtnText: {
+    fontSize: 16,
     fontWeight: '600',
     color: '#FFFFFF',
   },

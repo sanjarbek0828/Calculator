@@ -1,7 +1,7 @@
 {
   "name": "installed-apps",
-  "platforms": ["android", "ios"],
+  "platforms": ["android"],
   "android": {
-    "package": "expo.modules.installedapps.InstalledAppsModule"
+    "modules": ["expo.modules.installedapps.InstalledAppsModule"]
   }
 }

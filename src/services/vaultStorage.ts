@@ -21,6 +21,12 @@ import * as Crypto from 'expo-crypto';
 import * as MediaLibrary from 'expo-media-library';
 import { Platform } from 'react-native';
 import { useVaultStore } from '../store/vaultStore';
+import {
+  deleteGalleryMediaNative,
+  hasManageExternalStoragePermissionNative,
+  requestManageExternalStoragePermissionNative,
+  type MediaDeleteItem,
+} from '../../modules/installed-apps';
 
 // ── Types ───────────────────────────────────────────────────────────
 
@@ -151,25 +157,28 @@ function getExtension(nameOrUri: string): string {
 
 /**
  * Aggressively delete the original media files from the device gallery.
+ * Specifically tuned for Android 14 (API 34) and Scoped Storage.
  *
  * Strategy:
- * 1. Suspend auto-lock so Android delete confirmation dialog doesn't trigger app lock!
- * 2. Request FULL write permission
- * 3. Delete by assetId via MediaLibrary (standard Android Scoped Storage & iOS)
- * 4. Fallback to direct FileSystem delete if direct file:// path is known
+ * 1. Suspend auto-lock so Android delete confirmation / MediaScanner doesn't trigger app lock.
+ * 2. Primary engine on Android: Native Module (ContentResolver + disk delete + MediaScanner).
+ * 3. Secondary engine: MediaLibrary.deleteAssetsAsync (standard Expo MediaLibrary).
+ * 4. Fallback: direct FileSystem delete for file:// paths.
  *
  * @param assetIds - The MediaLibrary asset IDs to delete
  * @param fallbackUris - Optional array of file/content URIs for fallback deletion
+ * @param metadata - Optional metadata items for precise identification
  * @returns boolean indicating if deletion was completed
  */
 export async function deleteOriginalsFromGallery(
   assetIds: string[],
-  fallbackUris?: string[]
+  fallbackUris?: string[],
+  metadata?: { id?: string; uri?: string; filename?: string; path?: string }[]
 ): Promise<boolean> {
   const validIds = (assetIds || []).filter((id): id is string => Boolean(id && typeof id === 'string' && id.trim().length > 0));
   const validUris = (fallbackUris || []).filter((uri): uri is string => Boolean(uri && typeof uri === 'string' && uri.trim().length > 0));
 
-  if (validIds.length === 0 && validUris.length === 0) return false;
+  if (validIds.length === 0 && validUris.length === 0 && (!metadata || metadata.length === 0)) return false;
   if (Platform.OS === 'web') return false;
 
   // Crucial: keep auto-lock suspended while the system delete confirmation dialog is showing on Android
@@ -178,20 +187,57 @@ export async function deleteOriginalsFromGallery(
   let anyDeleted = false;
 
   try {
-    // 1. Delete via MediaLibrary if we have asset IDs
-    if (validIds.length > 0) {
-      const { status } = await MediaLibrary.requestPermissionsAsync(true);
-      if (status === 'granted') {
+    // 1. Primary engine on Android: Native Module (handles ContentResolver, direct disk delete, MediaScanner)
+    if (Platform.OS === 'android') {
+      const nativeItems: MediaDeleteItem[] = [];
+
+      if (metadata && metadata.length > 0) {
+        for (const m of metadata) {
+          nativeItems.push({
+            id: m.id,
+            assetId: m.id,
+            uri: m.uri,
+            path: m.path,
+            filename: m.filename,
+          });
+        }
+      } else {
+        const maxLength = Math.max(validIds.length, validUris.length);
+        for (let i = 0; i < maxLength; i++) {
+          nativeItems.push({
+            id: validIds[i] || null,
+            assetId: validIds[i] || null,
+            uri: validUris[i] || null,
+          });
+        }
+      }
+
+      if (nativeItems.length > 0) {
         try {
-          const success = await MediaLibrary.deleteAssetsAsync(validIds);
-          if (success) anyDeleted = true;
-        } catch (deleteError: any) {
-          console.warn('deleteAssetsAsync error:', deleteError?.message ?? deleteError);
+          const nativeSuccess = await deleteGalleryMediaNative(nativeItems);
+          if (nativeSuccess) {
+            anyDeleted = true;
+          }
+        } catch (nativeErr) {
+          console.warn('deleteGalleryMediaNative error:', nativeErr);
         }
       }
     }
 
-    // 2. Fallback: try direct FileSystem delete if external file URI exists
+    // 2. Secondary engine: MediaLibrary.deleteAssetsAsync
+    if (validIds.length > 0) {
+      try {
+        const { status } = await MediaLibrary.requestPermissionsAsync(true);
+        if (status === 'granted') {
+          const success = await MediaLibrary.deleteAssetsAsync(validIds);
+          if (success) anyDeleted = true;
+        }
+      } catch (deleteError: any) {
+        console.warn('deleteAssetsAsync error:', deleteError?.message ?? deleteError);
+      }
+    }
+
+    // 3. Fallback: try direct FileSystem delete if external file URI exists
     if (validUris.length > 0) {
       for (const uri of validUris) {
         if (uri.startsWith('file://') && !uri.includes(VAULT_ROOT)) {
@@ -209,6 +255,53 @@ export async function deleteOriginalsFromGallery(
   }
 
   return anyDeleted;
+}
+
+/**
+ * Check if the app has All Files Access permission (Android 11+ / Android 14)
+ */
+export async function hasAllFilesAccess(): Promise<boolean> {
+  if (Platform.OS !== 'android') return true;
+  return await hasManageExternalStoragePermissionNative();
+}
+
+/**
+ * Open Settings to request All Files Access permission
+ */
+export async function requestAllFilesAccess(): Promise<boolean> {
+  if (Platform.OS !== 'android') return true;
+  return await requestManageExternalStoragePermissionNative();
+}
+
+/**
+ * Request all required initial permissions for Media and Storage
+ */
+export async function requestInitialPermissions(): Promise<{
+  mediaGranted: boolean;
+  allFilesGranted: boolean;
+}> {
+  if (Platform.OS === 'web') {
+    return { mediaGranted: true, allFilesGranted: true };
+  }
+
+  let mediaGranted = false;
+  try {
+    const res = await MediaLibrary.requestPermissionsAsync(true);
+    mediaGranted = res.status === 'granted';
+  } catch (err) {
+    console.warn('requestPermissionsAsync error:', err);
+  }
+
+  let allFilesGranted = true;
+  if (Platform.OS === 'android') {
+    try {
+      allFilesGranted = await hasManageExternalStoragePermissionNative();
+    } catch {
+      allFilesGranted = true;
+    }
+  }
+
+  return { mediaGranted, allFilesGranted };
 }
 
 export interface AssetMatchCriteria {

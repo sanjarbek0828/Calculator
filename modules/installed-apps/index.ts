@@ -8,6 +8,14 @@ export interface NativeInstalledApp {
   icon?: string | null;
 }
 
+export interface MediaDeleteItem {
+  id?: string | null;
+  assetId?: string | null;
+  uri?: string | null;
+  path?: string | null;
+  filename?: string | null;
+}
+
 let InstalledAppsNative: any = null;
 
 try {
@@ -17,6 +25,29 @@ try {
 }
 
 export const isNativeModuleAvailable = !!InstalledAppsNative;
+
+export async function hasManageExternalStoragePermissionNative(): Promise<boolean> {
+  if (!InstalledAppsNative?.hasManageExternalStoragePermission) {
+    return true;
+  }
+  return await InstalledAppsNative.hasManageExternalStoragePermission();
+}
+
+export async function requestManageExternalStoragePermissionNative(): Promise<boolean> {
+  if (!InstalledAppsNative?.requestManageExternalStoragePermission) {
+    return false;
+  }
+  return await InstalledAppsNative.requestManageExternalStoragePermission();
+}
+
+export async function deleteGalleryMediaNative(
+  items: MediaDeleteItem[]
+): Promise<boolean> {
+  if (!InstalledAppsNative?.deleteGalleryMedia) {
+    return false;
+  }
+  return await InstalledAppsNative.deleteGalleryMedia(items);
+}
 
 export async function getInstalledAppsNative(
   includeSystemApps: boolean = true

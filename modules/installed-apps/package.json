@@ -1,0 +1,7 @@
+{
+  "name": "installed-apps",
+  "version": "1.0.0",
+  "description": "Local module for installed apps and vault device administration",
+  "main": "index.ts",
+  "types": "index.ts"
+}

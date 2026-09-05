@@ -16,6 +16,7 @@ import * as ScreenCapture from 'expo-screen-capture';
 import { useVaultStore, isAutoLockSuspendedSync } from '../src/store/vaultStore';
 import { useVaultAuth } from '../src/hooks/useVaultAuth';
 import { ensureVaultDirs } from '../src/services/vaultStorage';
+import { reApplySystemHiding } from '../src/services/vaultAppsService';
 
 export default function RootLayout() {
   const router = useRouter();
@@ -38,6 +39,10 @@ export default function RootLayout() {
       (nextState: AppStateStatus) => {
         const prev = appState.current;
         appState.current = nextState;
+
+        if (nextState === 'active') {
+          reApplySystemHiding();
+        }
 
         // Synchronously check if auto-lock is currently suspended
         // (e.g., photo picker, document picker, permission dialog, delete confirmation)

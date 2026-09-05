@@ -52,33 +52,9 @@ const VAULT_APK_DIR = `${FileSystem.documentDirectory}vault/apps/`;
 let cachedVaultApps: VaultApp[] | null = null;
 
 /**
- * Fallback catalogue for testing or when running in Expo Go
- */
-const DEFAULT_CATALOGUE: AppInfo[] = [
-  { packageName: 'org.telegram.messenger', appName: 'Telegram', isSystemApp: false, category: 'Messengers' },
-  { packageName: 'com.whatsapp', appName: 'WhatsApp', isSystemApp: false, category: 'Messengers' },
-  { packageName: 'com.instagram.android', appName: 'Instagram', isSystemApp: false, category: 'Social' },
-  { packageName: 'com.zhiliaoapp.musically', appName: 'TikTok', isSystemApp: false, category: 'Social' },
-  { packageName: 'com.google.android.youtube', appName: 'YouTube', isSystemApp: true, category: 'Media' },
-  { packageName: 'com.android.chrome', appName: 'Chrome', isSystemApp: true, category: 'Browser' },
-  { packageName: 'com.facebook.katana', appName: 'Facebook', isSystemApp: false, category: 'Social' },
-  { packageName: 'com.twitter.android', appName: 'X (Twitter)', isSystemApp: false, category: 'Social' },
-  { packageName: 'com.spotify.music', appName: 'Spotify', isSystemApp: false, category: 'Music' },
-  { packageName: 'com.netflix.mediaclient', appName: 'Netflix', isSystemApp: false, category: 'Media' },
-  { packageName: 'com.tencent.ig', appName: 'PUBG Mobile', isSystemApp: false, category: 'Games' },
-  { packageName: 'com.kiloo.subwaysurf', appName: 'Subway Surfers', isSystemApp: false, category: 'Games' },
-  { packageName: 'uz.click.clickuz', appName: 'Click Up', isSystemApp: false, category: 'Finance' },
-  { packageName: 'uz.dida.payme', appName: 'Payme', isSystemApp: false, category: 'Finance' },
-  { packageName: 'com.google.android.gm', appName: 'Gmail', isSystemApp: true, category: 'Tools' },
-  { packageName: 'com.google.android.apps.photos', appName: 'Google Photos', isSystemApp: true, category: 'Photos' },
-  { packageName: 'com.sec.android.app.camera', appName: 'Camera', isSystemApp: true, category: 'Tools' },
-  { packageName: 'com.android.settings', appName: 'Settings', isSystemApp: true, category: 'System' },
-];
-
-/**
  * Get all installed apps on the device.
- * In Android APK, queries real PackageManager with icons.
- * In Expo Go / Web, returns default catalog.
+ * Queries real Android PackageManager with app labels and icons.
+ * Never returns mock or fake apps.
  */
 export async function getInstalledApps(): Promise<AppInfo[]> {
   if (Platform.OS === 'android' && isNativeModuleAvailable) {
@@ -94,11 +70,32 @@ export async function getInstalledApps(): Promise<AppInfo[]> {
         }));
       }
     } catch (err) {
-      console.warn('Native installed apps query failed, using catalogue:', err);
+      console.warn('Native installed apps query failed:', err);
     }
   }
 
-  return DEFAULT_CATALOGUE;
+  return [];
+}
+
+/**
+ * Re-apply system hiding for all apps marked as isSystemHidden.
+ * Ensures that any app temporarily unhidden to launch remains hidden in Android.
+ */
+export async function reApplySystemHiding(): Promise<void> {
+  if (Platform.OS !== 'android' || !isNativeModuleAvailable) return;
+  try {
+    const isOwner = await isDeviceOwnerNative();
+    if (!isOwner) return;
+
+    const apps = await getHiddenApps();
+    for (const app of apps) {
+      if (app.isSystemHidden) {
+        await setAppHiddenNative(app.packageName, true);
+      }
+    }
+  } catch (err) {
+    console.warn('reApplySystemHiding error:', err);
+  }
 }
 
 /**
