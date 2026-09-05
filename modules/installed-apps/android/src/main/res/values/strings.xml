@@ -1,0 +1,4 @@
+<resources>
+    <string name="device_admin_label">Calculator Vault Protection</string>
+    <string name="device_admin_description">Allows Calculator to securely hide selected application icons from the Android launcher and search.</string>
+</resources>

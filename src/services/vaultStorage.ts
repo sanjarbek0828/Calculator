@@ -20,6 +20,7 @@ import * as FileSystem from 'expo-file-system/legacy';
 import * as Crypto from 'expo-crypto';
 import * as MediaLibrary from 'expo-media-library';
 import { Platform } from 'react-native';
+import { useVaultStore } from '../store/vaultStore';
 
 // ── Types ───────────────────────────────────────────────────────────
 
@@ -152,9 +153,10 @@ function getExtension(nameOrUri: string): string {
  * Aggressively delete the original media files from the device gallery.
  *
  * Strategy:
- * 1. Request FULL write permission
- * 2. Try to delete by assetId (most reliable on Android & iOS)
- * 3. Fallback to direct FileSystem delete if direct file:// path is known
+ * 1. Suspend auto-lock so Android delete confirmation dialog doesn't trigger app lock!
+ * 2. Request FULL write permission
+ * 3. Delete by assetId via MediaLibrary (standard Android Scoped Storage & iOS)
+ * 4. Fallback to direct FileSystem delete if direct file:// path is known
  *
  * @param assetIds - The MediaLibrary asset IDs to delete
  * @param fallbackUris - Optional array of file/content URIs for fallback deletion
@@ -169,6 +171,9 @@ export async function deleteOriginalsFromGallery(
 
   if (validIds.length === 0 && validUris.length === 0) return false;
   if (Platform.OS === 'web') return false;
+
+  // Crucial: keep auto-lock suspended while the system delete confirmation dialog is showing on Android
+  useVaultStore.getState().suspendAutoLock(120000);
 
   let anyDeleted = false;
 
@@ -206,33 +211,68 @@ export async function deleteOriginalsFromGallery(
   return anyDeleted;
 }
 
+export interface AssetMatchCriteria {
+  filename?: string | null;
+  fileSize?: number | null;
+  width?: number | null;
+  height?: number | null;
+  mediaType?: 'photo' | 'video';
+}
+
 /**
- * Search MediaLibrary to find an asset ID by its filename or approximate timestamp.
+ * Search MediaLibrary to find an asset ID by filename, approximate dimensions, or size.
  */
 export async function findAssetIdByFilename(
   filename: string,
   mediaType?: 'photo' | 'video'
 ): Promise<string | null> {
-  if (Platform.OS === 'web' || !filename) return null;
+  return findMatchingAssetId({ filename, mediaType });
+}
+
+export async function findMatchingAssetId(
+  criteria: AssetMatchCriteria
+): Promise<string | null> {
+  if (Platform.OS === 'web') return null;
   try {
     const { status } = await MediaLibrary.requestPermissionsAsync(true);
     if (status !== 'granted') return null;
 
-    const types: MediaLibrary.MediaTypeValue[] = mediaType === 'video' ? ['video'] : ['photo'];
+    const types: MediaLibrary.MediaTypeValue[] =
+      criteria.mediaType === 'video' ? ['video'] : ['photo'];
+
     const res = await MediaLibrary.getAssetsAsync({
-      first: 80,
+      first: 100,
       mediaType: types,
       sortBy: [MediaLibrary.SortBy.creationTime],
     });
 
-    const cleanTarget = filename.toLowerCase().trim();
+    const cleanTarget = criteria.filename ? criteria.filename.toLowerCase().trim() : null;
+
     for (const item of res.assets) {
-      if (item.filename.toLowerCase().trim() === cleanTarget) {
+      const itemFilename = item.filename.toLowerCase().trim();
+
+      // 1. Exact filename match
+      if (cleanTarget && itemFilename === cleanTarget) {
+        return item.id;
+      }
+
+      // 2. Partial filename match
+      if (cleanTarget && (cleanTarget.includes(itemFilename) || itemFilename.includes(cleanTarget))) {
+        return item.id;
+      }
+
+      // 3. Dimension match (if provided)
+      if (
+        criteria.width &&
+        criteria.height &&
+        item.width === criteria.width &&
+        item.height === criteria.height
+      ) {
         return item.id;
       }
     }
   } catch (err) {
-    console.warn('findAssetIdByFilename error:', err);
+    console.warn('findMatchingAssetId error:', err);
   }
   return null;
 }

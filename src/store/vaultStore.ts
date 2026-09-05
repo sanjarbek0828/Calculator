@@ -29,6 +29,13 @@ interface VaultState {
   /** True if any media picker is currently open */
   isPickingMedia: boolean;
 
+  /**
+   * Timestamp (ms) until which auto-lock should be completely suspended.
+   * Prevents premature locking during system dialogs (e.g. Android permissions,
+   * delete confirmation prompts, file pickers).
+   */
+  autoLockSuspendedUntil: number;
+
   // ── Actions ─────────────────────────────────────────────────────
   openVault: () => void;
   closeVault: () => void;
@@ -41,18 +48,23 @@ interface VaultState {
   incrementPickingMedia: () => void;
   /** Decrement the picking media counter */
   decrementPickingMedia: () => void;
+  /** Suspend auto-lock for a given duration in milliseconds (default: 60s) */
+  suspendAutoLock: (durationMs?: number) => void;
+  /** Resume auto-lock immediately */
+  resumeAutoLock: () => void;
 }
 
-export const useVaultStore = create<VaultState>((set) => ({
+export const useVaultStore = create<VaultState>((set, get) => ({
   isVaultOpen: false,
   isOnboarded: false,
   isBiometricEnabled: false,
   autoDeleteOriginal: true, // Default to always delete from gallery
   pickingMediaCount: 0,
   isPickingMedia: false,
+  autoLockSuspendedUntil: 0,
 
   openVault: () => set({ isVaultOpen: true }),
-  closeVault: () => set({ isVaultOpen: false }),
+  closeVault: () => set({ isVaultOpen: false, pickingMediaCount: 0, isPickingMedia: false, autoLockSuspendedUntil: 0 }),
   setOnboarded: (value) => set({ isOnboarded: value }),
   setBiometricEnabled: (value) => set({ isBiometricEnabled: value }),
   setAutoDeleteOriginal: (value) => set({ autoDeleteOriginal: value }),
@@ -61,7 +73,11 @@ export const useVaultStore = create<VaultState>((set) => ({
     set((state) => {
       if (value) {
         const count = state.pickingMediaCount + 1;
-        return { pickingMediaCount: count, isPickingMedia: count > 0 };
+        return {
+          pickingMediaCount: count,
+          isPickingMedia: true,
+          autoLockSuspendedUntil: Math.max(state.autoLockSuspendedUntil, Date.now() + 60000),
+        };
       } else {
         const count = Math.max(0, state.pickingMediaCount - 1);
         return { pickingMediaCount: count, isPickingMedia: count > 0 };
@@ -71,12 +87,47 @@ export const useVaultStore = create<VaultState>((set) => ({
   incrementPickingMedia: () =>
     set((state) => {
       const count = state.pickingMediaCount + 1;
-      return { pickingMediaCount: count, isPickingMedia: true };
+      return {
+        pickingMediaCount: count,
+        isPickingMedia: true,
+        autoLockSuspendedUntil: Math.max(state.autoLockSuspendedUntil, Date.now() + 60000),
+      };
     }),
 
   decrementPickingMedia: () =>
     set((state) => {
       const count = Math.max(0, state.pickingMediaCount - 1);
-      return { pickingMediaCount: count, isPickingMedia: count > 0 };
+      return {
+        pickingMediaCount: count,
+        isPickingMedia: count > 0,
+        // Keep a 2-second grace period after decrement so quick transitions don't lock
+        autoLockSuspendedUntil: count === 0 ? Date.now() + 2000 : state.autoLockSuspendedUntil,
+      };
+    }),
+
+  suspendAutoLock: (durationMs = 60000) =>
+    set((state) => ({
+      autoLockSuspendedUntil: Math.max(state.autoLockSuspendedUntil, Date.now() + durationMs),
+      isPickingMedia: true,
+      pickingMediaCount: Math.max(state.pickingMediaCount, 1),
+    })),
+
+  resumeAutoLock: () =>
+    set({
+      autoLockSuspendedUntil: 0,
+      isPickingMedia: false,
+      pickingMediaCount: 0,
     }),
 }));
+
+/**
+ * Synchronously checks if auto-lock is currently suspended.
+ * Safe to call directly inside AppState callbacks without React render delays.
+ */
+export function isAutoLockSuspendedSync(): boolean {
+  const state = useVaultStore.getState();
+  if (state.pickingMediaCount > 0 || state.isPickingMedia) return true;
+  if (Date.now() < state.autoLockSuspendedUntil) return true;
+  return false;
+}
+

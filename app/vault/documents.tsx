@@ -20,7 +20,6 @@ import {
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import * as DocumentPicker from 'expo-document-picker';
-import * as FileSystem from 'expo-file-system/legacy';
 import {
   listFiles,
   importFile,
@@ -28,6 +27,7 @@ import {
   exportFile,
   type VaultFile,
 } from '../../src/services/vaultStorage';
+import { useVaultStore } from '../../src/store/vaultStore';
 
 export default function DocumentsTab() {
   const [files, setFiles] = useState<VaultFile[]>([]);
@@ -46,24 +46,31 @@ export default function DocumentsTab() {
 
   // ── Import ────────────────────────────────────────────────────
   const handleImport = useCallback(async () => {
-    const result = await DocumentPicker.getDocumentAsync({
-      type: '*/*',
-      multiple: true,
-    });
+    useVaultStore.getState().suspendAutoLock(120000);
+    useVaultStore.getState().incrementPickingMedia();
 
-    if (result.canceled || !result.assets?.length) return;
+    try {
+      const result = await DocumentPicker.getDocumentAsync({
+        type: '*/*',
+        multiple: true,
+      });
 
-    for (const asset of result.assets) {
-      await importFile(
-        asset.uri,
-        'documents',
-        asset.name || `document_${Date.now()}`,
-        asset.mimeType || 'application/octet-stream',
-        false // Never auto-delete document originals
-      );
+      if (result.canceled || !result.assets?.length) return;
+
+      for (const asset of result.assets) {
+        await importFile(
+          asset.uri,
+          'documents',
+          asset.name || `document_${Date.now()}`,
+          asset.mimeType || 'application/octet-stream',
+          false // Never auto-delete document originals
+        );
+      }
+
+      loadFiles();
+    } finally {
+      useVaultStore.getState().decrementPickingMedia();
     }
-
-    loadFiles();
   }, [loadFiles]);
 
   const handleExport = useCallback(async (file: VaultFile) => {

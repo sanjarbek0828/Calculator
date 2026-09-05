@@ -24,6 +24,7 @@ import {
 import { Ionicons } from '@expo/vector-icons';
 import * as MediaLibrary from 'expo-media-library';
 import * as Haptics from 'expo-haptics';
+import { useVaultStore } from '../store/vaultStore';
 
 const { width: SCREEN_WIDTH } = Dimensions.get('window');
 const NUM_COLUMNS = 3;
@@ -61,6 +62,9 @@ export function MediaPickerModal({
     if (!visible) return;
     setLoading(true);
     try {
+      // Suspend auto-lock while Android permission dialog is showing
+      useVaultStore.getState().suspendAutoLock(120000);
+
       const { status } = await MediaLibrary.requestPermissionsAsync(true);
       if (status !== 'granted') {
         setHasPermission(false);
@@ -88,6 +92,8 @@ export function MediaPickerModal({
 
   useEffect(() => {
     if (visible) {
+      // Suspend auto-lock immediately upon modal opening
+      useVaultStore.getState().suspendAutoLock(120000);
       setSelectedIds(new Set());
       loadMedia();
     }
@@ -116,6 +122,8 @@ export function MediaPickerModal({
     if (selectedIds.size === 0) return;
     const selected = assets.filter((a) => selectedIds.has(a.id));
     setImporting(true);
+    // Keep auto-lock suspended throughout file import and gallery deletion dialog
+    useVaultStore.getState().suspendAutoLock(180000);
     try {
       await onImportAssets(selected);
       onClose();
@@ -172,7 +180,7 @@ export function MediaPickerModal({
         <View style={styles.infoBanner}>
           <Ionicons name="shield-checkmark" size={16} color="#FF9500" />
           <Text style={styles.infoBannerText}>
-            Tanlangan fayllar Calculatorga o'tib, galereyadan o'chiriladi.
+            {"Tanlangan fayllar Calculatorga o'tib, galereyadan o'chiriladi."}
           </Text>
         </View>
 
@@ -180,14 +188,14 @@ export function MediaPickerModal({
         {loading ? (
           <View style={styles.center}>
             <ActivityIndicator size="large" color="#FF9500" />
-            <Text style={styles.loadingText}>Galereya o'qilmoqda...</Text>
+            <Text style={styles.loadingText}>{"Galereya o'qilmoqda..."}</Text>
           </View>
         ) : hasPermission === false ? (
           <View style={styles.center}>
             <Ionicons name="images-outline" size={56} color="#FF453A" />
             <Text style={styles.permissionTitle}>Galereyaga ruxsat berilmadi</Text>
             <Text style={styles.permissionSub}>
-              Fayllarni ko'rish va galereyadan o'chirish uchun ilovaga ruxsat zarur.
+              {"Fayllarni ko'rish va galereyadan o'chirish uchun ilovaga ruxsat zarur."}
             </Text>
             <Pressable style={styles.permButton} onPress={loadMedia}>
               <Text style={styles.permButtonText}>Qayta urinish</Text>
@@ -257,6 +265,7 @@ export function MediaPickerModal({
           <Pressable
             style={styles.systemPickerBtn}
             onPress={() => {
+              useVaultStore.getState().suspendAutoLock(120000);
               onClose();
               onOpenSystemPicker();
             }}
@@ -278,7 +287,7 @@ export function MediaPickerModal({
               <>
                 <Ionicons name="lock-closed" size={18} color="#FFF" />
                 <Text style={styles.importBtnText}>
-                  Yashirish va O'chirish ({selectedIds.size})
+                  {"Yashirish va O'chirish"} ({selectedIds.size})
                 </Text>
               </>
             )}

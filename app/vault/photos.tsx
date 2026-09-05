@@ -21,7 +21,6 @@ import {
   Text,
   Alert,
   Modal,
-  Image,
   SafeAreaView,
   Dimensions,
   ActivityIndicator,
@@ -46,7 +45,7 @@ import {
   deleteFile,
   exportFile,
   deleteOriginalsFromGallery,
-  findAssetIdByFilename,
+  findMatchingAssetId,
   type VaultFile,
 } from '../../src/services/vaultStorage';
 import { VaultGridItem, NUM_COLUMNS } from '../../src/components/VaultGridItem';
@@ -229,7 +228,8 @@ export default function PhotosTab() {
     async (selectedAssets: MediaLibrary.Asset[]) => {
       if (!selectedAssets || selectedAssets.length === 0) return;
 
-      // Keep pickingMedia active during import AND Android delete dialog to prevent auto-lock!
+      // Keep pickingMedia active & suspend auto-lock during import AND Android delete dialog!
+      useVaultStore.getState().suspendAutoLock(180000);
       incrementPickingMedia();
       setImporting(true);
       setImportProgress({ done: 0, total: selectedAssets.length });
@@ -259,6 +259,7 @@ export default function PhotosTab() {
 
         // Delete originals from gallery using confirmed MediaLibrary IDs
         if (assetIdsToDelete.length > 0 || urisToDelete.length > 0) {
+          useVaultStore.getState().suspendAutoLock(120000);
           await deleteOriginalsFromGallery(assetIdsToDelete, urisToDelete);
         }
 
@@ -277,6 +278,7 @@ export default function PhotosTab() {
   // ── Fallback: System ImagePicker with intelligent Asset ID resolver ──
   const handleSystemPickerImport = useCallback(async () => {
     try {
+      useVaultStore.getState().suspendAutoLock(180000);
       incrementPickingMedia();
 
       const result = await ImagePicker.launchImageLibraryAsync({
@@ -300,8 +302,14 @@ export default function PhotosTab() {
       for (let i = 0; i < result.assets.length; i++) {
         const asset = result.assets[i];
         let assetId = asset.assetId;
-        if (!assetId && asset.fileName) {
-          assetId = await findAssetIdByFilename(asset.fileName, 'photo');
+        if (!assetId) {
+          assetId = await findMatchingAssetId({
+            filename: asset.fileName,
+            width: asset.width,
+            height: asset.height,
+            fileSize: asset.fileSize,
+            mediaType: 'photo',
+          });
         }
 
         await importFile(
@@ -323,6 +331,7 @@ export default function PhotosTab() {
       }
 
       if (assetIdsToDelete.length > 0 || urisToDelete.length > 0) {
+        useVaultStore.getState().suspendAutoLock(120000);
         await deleteOriginalsFromGallery(assetIdsToDelete, urisToDelete);
       }
 
@@ -337,6 +346,7 @@ export default function PhotosTab() {
   }, [loadFiles, incrementPickingMedia, decrementPickingMedia]);
 
   const handleImport = useCallback(() => {
+    useVaultStore.getState().suspendAutoLock(120000);
     setShowMediaPicker(true);
   }, []);
 

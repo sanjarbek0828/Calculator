@@ -1,12 +1,15 @@
 /**
- * vault/apps.tsx — Apps & Games Vault Tab (v4)
+ * vault/apps.tsx — Apps & Games Vault Tab (v5 - Ultimate App Hider)
  *
  * Professional App Hider & Vault for Android:
  * - Scans all installed apps on device (Play Store & System apps)
  * - Multi-select to hide any number of apps inside Calculator Vault
- * - Direct 1-tap launch from inside Calculator
- * - System App Info & OEM launcher hide guidance (Samsung, Xiaomi, Oppo, Vivo, Android)
- * - Optional APK file import support
+ * - 1-tap System Hide: removes app icon from Android launcher & search
+ *   (via Device Policy Manager dpm.setApplicationHidden, Root/Shell, or OEM deep-link)
+ * - 1-tap direct launch from inside Calculator
+ * - OEM Launcher direct shortcuts (Samsung, Xiaomi, Oppo, Vivo, OnePlus)
+ * - APK extraction to vault & safe uninstall from phone
+ * - Haptic feedback & modern dark aesthetic
  */
 
 import React, { useState, useCallback, useEffect, useMemo } from 'react';
@@ -24,6 +27,7 @@ import {
   TextInput,
   ScrollView,
   StatusBar,
+  Share,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import * as Haptics from 'expo-haptics';
@@ -35,10 +39,18 @@ import {
   removeAppFromVault,
   launchApp,
   openAppInfo,
+  checkIsDeviceOwner,
+  hideAppFromSystem,
+  unhideAppFromSystem,
+  openOemHideSettings,
+  backupAppApkAndUninstall,
+  getDeviceOwnerCommand,
+  getDeviceManufacturer,
   type AppInfo,
   type VaultApp,
 } from '../../src/services/vaultAppsService';
 import { importFile, listFiles, deleteFile, type VaultFile } from '../../src/services/vaultStorage';
+import { useVaultStore } from '../../src/store/vaultStore';
 
 type AppTabMode = 'apps' | 'files';
 type FilterCategory = 'all' | 'user' | 'system';
@@ -50,6 +62,9 @@ export default function AppsTab() {
   const [loading, setLoading] = useState(true);
   const [scanning, setScanning] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
+  const [isDeviceOwner, setIsDeviceOwner] = useState(false);
+  const [deviceManufacturer, setDeviceManufacturer] = useState('Android');
+  const [deviceOwnerCommand, setDeviceOwnerCommand] = useState('');
 
   // Add App Modal state
   const [showAddModal, setShowAddModal] = useState(false);
@@ -57,9 +72,9 @@ export default function AppsTab() {
   const [modalFilter, setModalFilter] = useState<FilterCategory>('all');
   const [selectedPackages, setSelectedPackages] = useState<Set<string>>(new Set());
 
-  // Hide Guide Modal state
-  const [showGuideModal, setShowGuideModal] = useState(false);
-  const [targetGuideApp, setTargetGuideApp] = useState<VaultApp | null>(null);
+  // Hide Assistant Modal state
+  const [showAssistantModal, setShowAssistantModal] = useState(false);
+  const [selectedTargetApp, setSelectedTargetApp] = useState<VaultApp | null>(null);
 
   // APK files state
   const [apkFiles, setApkFiles] = useState<VaultFile[]>([]);
@@ -68,12 +83,18 @@ export default function AppsTab() {
   const loadData = useCallback(async () => {
     setLoading(true);
     try {
-      const [apps, files] = await Promise.all([
+      const [apps, files, isDO, manufacturer, adbCmd] = await Promise.all([
         getHiddenApps(),
         listFiles('apps'),
+        checkIsDeviceOwner(),
+        getDeviceManufacturer(),
+        getDeviceOwnerCommand(),
       ]);
       setHiddenApps(apps);
       setApkFiles(files);
+      setIsDeviceOwner(isDO);
+      setDeviceManufacturer(manufacturer);
+      setDeviceOwnerCommand(adbCmd);
     } catch (e) {
       console.warn('Failed to load apps data:', e);
     } finally {
@@ -87,6 +108,7 @@ export default function AppsTab() {
 
   // ── Open Add Apps Modal ────────────────────────────────────────
   const handleOpenAddModal = useCallback(async () => {
+    useVaultStore.getState().suspendAutoLock(120000);
     setShowAddModal(true);
     setSelectedPackages(new Set());
     setScanning(true);
@@ -137,17 +159,17 @@ export default function AppsTab() {
     setShowAddModal(false);
     await loadData();
 
-    // Show guide suggestion
     if (toAdd.length > 0) {
-      setTargetGuideApp(toAdd[0] as VaultApp);
+      const first = toAdd[0] as VaultApp;
+      setSelectedTargetApp(first);
       Alert.alert(
         'Ilovalar Calculatorga joylandi!',
-        `${toAdd.length} ta ilova Calculator ichiga yashirildi. Endi ularni asosiy telefon ekranidan qanday yashirishni bilmoqchimisiz?`,
+        `${toAdd.length} ta ilova Calculator ichiga saqlandi. Endi ularni telefonning asosiy menyusi va qidiruvidan ham yo'qotishni xohlaysizmi?`,
         [
-          { text: 'Yoq, kerakmas', style: 'cancel' },
+          { text: 'Keyinroq', style: 'cancel' },
           {
-            text: "Yo'riqnomani ko'rish",
-            onPress: () => setShowGuideModal(true),
+            text: "Qidiruvdan yashirish",
+            onPress: () => setShowAssistantModal(true),
           },
         ]
       );
@@ -157,21 +179,80 @@ export default function AppsTab() {
   // ── Launch an app ──────────────────────────────────────────────
   const handleLaunchApp = useCallback(async (app: VaultApp) => {
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+    useVaultStore.getState().suspendAutoLock(60000);
     const ok = await launchApp(app.packageName);
     if (!ok) {
       Alert.alert(
         app.appName,
-        `Ilovani to'g'ridan-to'g'ri ishga tushirib bo'lmadi.\nPaket: ${app.packageName}\n\nTizim sozlamalari orqali ochishni xohlaysizmi?`,
+        `Ilovani to'g'ridan-to'g'ri ochib bo'lmadi.\nPaket: ${app.packageName}`,
         [
           { text: 'Bekor', style: 'cancel' },
           {
-            text: 'Sozlamalarni ochish',
+            text: 'Ilova sozlamalarini ochish',
             onPress: () => openAppInfo(app.packageName),
           },
         ]
       );
     }
   }, []);
+
+  // ── Toggle System Hide (Remove from Launcher & Search) ─────────
+  const handleToggleSystemHide = useCallback(
+    async (app: VaultApp) => {
+      Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+
+      if (app.isSystemHidden) {
+        // Unhide
+        const ok = await unhideAppFromSystem(app.packageName);
+        if (ok) {
+          Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+          Alert.alert(app.appName, 'Ilova qayta ko\'rsatildi.');
+        }
+        await loadData();
+        return;
+      }
+
+      // Try system hide
+      const result = await hideAppFromSystem(app.packageName);
+      if (result.success) {
+        Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+        Alert.alert(
+          'Muvaffaqiyatli!',
+          `"${app.appName}" ilovasi telefon menyusi va qidiruvidan butunlay yashirildi! Faqat Calculator ichidan ochishingiz mumkin.`
+        );
+        await loadData();
+      } else {
+        // Open assistant modal with tailored options
+        setSelectedTargetApp(app);
+        setShowAssistantModal(true);
+      }
+    },
+    [loadData]
+  );
+
+  // ── Extract APK & Uninstall original ───────────────────────────
+  const handleBackupAndUninstall = useCallback(
+    async (app: VaultApp) => {
+      Alert.alert(
+        'APK zaxiralash va Aslini o\'chirish',
+        `"${app.appName}" ilovasining APK fayli Calculator ichida xavfsiz saqlanadi, so'ngra u telefondan o'chiriladi. Shunda ilova telefon qidiruvida 100% yo'qoladi.\n\nDavom etilsinmi?`,
+        [
+          { text: 'Bekor', style: 'cancel' },
+          {
+            text: 'Ha, o\'chirish',
+            style: 'destructive',
+            onPress: async () => {
+              useVaultStore.getState().suspendAutoLock(120000);
+              await backupAppApkAndUninstall(app.packageName, app.appName);
+              setShowAssistantModal(false);
+              await loadData();
+            },
+          },
+        ]
+      );
+    },
+    [loadData]
+  );
 
   // ── Remove app from Vault ──────────────────────────────────────
   const handleRemoveApp = useCallback(
@@ -196,37 +277,44 @@ export default function AppsTab() {
     [loadData]
   );
 
-  // ── Show App Actions Sheet ─────────────────────────────────────
+  // ── Show App Options Sheet ─────────────────────────────────────
   const handleAppOptions = useCallback(
     (app: VaultApp) => {
       Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
       Alert.alert(app.appName, `Paket: ${app.packageName}`, [
-        { text: '▶ Ishga tushirish', onPress: () => handleLaunchApp(app) },
+        { text: '▶ Ishga tushirish (Ochish)', onPress: () => handleLaunchApp(app) },
         {
-          text: "👁️ Asosiy ekrandan yashirish yo'riqnomasi",
+          text: app.isSystemHidden ? '👁️ Qayta ko\'rsatish' : '🛡️ Qidiruv va Menyudan yashirish',
+          onPress: () => handleToggleSystemHide(app),
+        },
+        {
+          text: '📦 APK zaxiralab, telefondan o\'chirish',
+          onPress: () => handleBackupAndUninstall(app),
+        },
+        {
+          text: '⚙️ Ilova tizim sozlamalari (App Info)',
           onPress: () => {
-            setTargetGuideApp(app);
-            setShowGuideModal(true);
+            useVaultStore.getState().suspendAutoLock(60000);
+            openAppInfo(app.packageName);
           },
         },
         {
-          text: "⚙️ Ilova tizim sozlamalari (App Info)",
-          onPress: () => openAppInfo(app.packageName),
-        },
-        {
-          text: "🗑️ Kalkulyatordan chiqarish",
+          text: '🗑️ Kalkulyatordan chiqarish',
           style: 'destructive',
           onPress: () => handleRemoveApp(app),
         },
         { text: 'Bekor', style: 'cancel' },
       ]);
     },
-    [handleLaunchApp, handleRemoveApp]
+    [handleLaunchApp, handleToggleSystemHide, handleBackupAndUninstall, handleRemoveApp]
   );
 
   // ── Import APK / App Document ──────────────────────────────────
   const handleImportApk = useCallback(async () => {
     try {
+      useVaultStore.getState().suspendAutoLock(120000);
+      useVaultStore.getState().incrementPickingMedia();
+
       const result = await DocumentPicker.getDocumentAsync({
         type: '*/*',
         multiple: true,
@@ -250,6 +338,7 @@ export default function AppsTab() {
     } catch {
       Alert.alert('Xatolik', 'Faylni import qilib bo\'lmadi.');
     } finally {
+      useVaultStore.getState().decrementPickingMedia();
       setLoading(false);
     }
   }, [loadData]);
@@ -292,7 +381,7 @@ export default function AppsTab() {
 
   return (
     <SafeAreaView style={styles.container}>
-      <StatusBar barStyle="light-content" backgroundColor="#000000" />
+      <StatusBar barStyle="light-content" backgroundColor="#0a0a14" />
 
       {/* Header */}
       <View style={styles.header}>
@@ -312,6 +401,38 @@ export default function AppsTab() {
             <Text style={styles.addAppTopBtnText}>Ilova yashirish</Text>
           </Pressable>
         </View>
+      </View>
+
+      {/* System Status Banner */}
+      <View style={styles.statusBanner}>
+        <Ionicons
+          name={isDeviceOwner ? 'shield-checkmark' : 'shield-outline'}
+          size={18}
+          color={isDeviceOwner ? '#30D158' : '#FF9500'}
+        />
+        <View style={{ flex: 1 }}>
+          <Text style={styles.statusBannerTitle}>
+            {isDeviceOwner
+              ? 'Tizim darajasidagi himoya faol'
+              : 'Qidiruvdan yashirish yordamchisi tayyor'}
+          </Text>
+          <Text style={styles.statusBannerSub}>
+            {isDeviceOwner
+              ? 'Ilovalar launcher va qidiruvdan 100% yashiriladi'
+              : `${deviceManufacturer} tizimida ilovalarni menyudan yo'qotish mumkin`}
+          </Text>
+        </View>
+        {!isDeviceOwner && (
+          <Pressable
+            style={styles.statusBannerBtn}
+            onPress={() => {
+              setSelectedTargetApp(hiddenApps[0] || null);
+              setShowAssistantModal(true);
+            }}
+          >
+            <Text style={styles.statusBannerBtnText}>Sozlash</Text>
+          </Pressable>
+        )}
       </View>
 
       {/* Tab Switcher: Hidden Apps vs Backup APKs */}
@@ -391,7 +512,7 @@ export default function AppsTab() {
                 : 'Qidiruv bo\'yicha topilmadi'}
             </Text>
             <Text style={styles.emptySubtext}>
-              Telefoningizdagi istalgan ilovani (Play Market yoki tizim) tanlab, Calculator ichiga yashirib qo'yishingiz mumkin.
+              {"Telefoningizdagi istalgan ilovani tanlang va uni Calculator ichiga yashirib, telefon menyusi va qidiruvidan yo'qoting."}
             </Text>
             <Pressable
               style={styles.emptyAddBtn}
@@ -436,13 +557,20 @@ export default function AppsTab() {
                     {item.packageName}
                   </Text>
                   <View style={styles.badgeRow}>
-                    <View style={styles.shieldBadge}>
-                      <Ionicons name="shield-checkmark" size={10} color="#FF9500" />
-                      <Text style={styles.shieldBadgeText}>Yashiringan</Text>
-                    </View>
-                    {item.isSystemApp && (
-                      <View style={styles.systemBadge}>
-                        <Text style={styles.systemBadgeText}>Tizim</Text>
+                    {item.isSystemHidden ? (
+                      <View style={styles.systemHiddenBadge}>
+                        <Ionicons name="shield-checkmark" size={10} color="#30D158" />
+                        <Text style={styles.systemHiddenBadgeText}>Qidiruvda chiqmaydi</Text>
+                      </View>
+                    ) : (
+                      <View style={styles.shieldBadge}>
+                        <Ionicons name="lock-closed" size={10} color="#FF9500" />
+                        <Text style={styles.shieldBadgeText}>Calculatorda saqlangan</Text>
+                      </View>
+                    )}
+                    {item.apkPath && (
+                      <View style={styles.apkSavedBadge}>
+                        <Text style={styles.apkSavedBadgeText}>APK Zaxira</Text>
                       </View>
                     )}
                   </View>
@@ -735,88 +863,115 @@ export default function AppsTab() {
         </SafeAreaView>
       </Modal>
 
-      {/* ── MODAL: Asosiy Ekrandan Yashirish Yo'riqnomasi ── */}
+      {/* ── MODAL: Qidiruv va Menyudan Yashirish Yordamchisi (Hide Center) ── */}
       <Modal
-        visible={showGuideModal}
+        visible={showAssistantModal}
         transparent
         animationType="slide"
-        onRequestClose={() => setShowGuideModal(false)}
+        onRequestClose={() => setShowAssistantModal(false)}
       >
         <View style={styles.guideOverlay}>
           <View style={styles.guideContent}>
             <View style={styles.guideHeader}>
               <View style={styles.guideIconBox}>
-                <Ionicons name="eye-off-outline" size={28} color="#FF9500" />
+                <Ionicons name="eye-off" size={28} color="#FF9500" />
               </View>
-              <Text style={styles.guideTitle}>Asosiy Ekrandan Yashirish</Text>
+              <Text style={styles.guideTitle}>Qidiruv va Menyudan Yashirish</Text>
               <Text style={styles.guideSubtitle}>
-                {targetGuideApp?.appName || 'Tanlangan ilova'} ni telefon menyusidan yo'qotish usullari
+                {selectedTargetApp ? `"${selectedTargetApp.appName}"` : 'Tanlangan ilova'} {"telefon qidiruvida va menyusida ko'rinmasligi uchun 3 ta qulay yo'l:"}
               </Text>
             </View>
 
             <ScrollView style={styles.guideBody}>
-              <View style={styles.guideSection}>
-                <Text style={styles.guideBrand}>Samsung telefonlarda:</Text>
-                <Text style={styles.guideStep}>
-                  1. Bosh ekranni bosib turing → <Text style={{ color: '#FF9500' }}>Sozlamalar (Settings)</Text>
+              {/* Method 1: OEM Hide Settings */}
+              <View style={styles.guideCard}>
+                <View style={styles.guideCardHeader}>
+                  <View style={styles.methodBadge}>
+                    <Text style={styles.methodBadgeText}>1-USUL: ENG OSON</Text>
+                  </View>
+                  <Text style={styles.guideCardTitle}>{deviceManufacturer} Yashirin Menyu</Text>
+                </View>
+                <Text style={styles.guideCardDesc}>
+                  {"Telefoningizning o'z tizimli \"Ilovalarni yashirish\" sozlamasini to'g'ridan-to'g'ri 1 bosishda oching va ilovani belgilang."}
                 </Text>
-                <Text style={styles.guideStep}>
-                  2. <Text style={{ color: '#FF9500' }}>"Bosh va ilovalar ekranlaridagi ilovalarni yashirish"</Text> bo'limiga kiring.
-                </Text>
-                <Text style={styles.guideStep}>
-                  3. Ilovani tanlab "Tayyor" (Done) tugmasini bosing.
-                </Text>
+                <Pressable
+                  style={styles.oemLaunchBtn}
+                  onPress={async () => {
+                    useVaultStore.getState().suspendAutoLock(60000);
+                    const opened = await openOemHideSettings(deviceManufacturer);
+                    if (!opened) {
+                      openAppInfo(selectedTargetApp?.packageName || '');
+                    }
+                  }}
+                >
+                  <Ionicons name="open-outline" size={18} color="#000" />
+                  <Text style={styles.oemLaunchBtnText}>
+                    {deviceManufacturer} Yashirish Sozlamasini Ochish
+                  </Text>
+                </Pressable>
               </View>
 
-              <View style={styles.guideSection}>
-                <Text style={styles.guideBrand}>Xiaomi / Redmi / POCO:</Text>
-                <Text style={styles.guideStep}>
-                  1. <Text style={{ color: '#FF9500' }}>Sozlamalar → Ilovalar → Ilovalarni qulflash</Text> ga kiring.
-                </Text>
-                <Text style={styles.guideStep}>
-                  2. Yuqoridagi <Text style={{ color: '#FF9500' }}>"Yashirin ilovalar" (Hidden apps)</Text> yorlig'ini tanlang va yoqing.
-                </Text>
-              </View>
+              {/* Method 2: Backup APK & Uninstall */}
+              {selectedTargetApp && (
+                <View style={styles.guideCard}>
+                  <View style={styles.guideCardHeader}>
+                    <View style={[styles.methodBadge, { backgroundColor: '#3ddc84' }]}>
+                      <Text style={[styles.methodBadgeText, { color: '#000' }]}>2-USUL: 100% KAFOLATLI</Text>
+                    </View>
+                    <Text style={styles.guideCardTitle}>{"APK Saqlash va Aslini O'chirish"}</Text>
+                  </View>
+                  <Text style={styles.guideCardDesc}>
+                    {"Ilovaning o'rnatish fayli (APK) Calculator ichiga ko'chiriladi, so'ng telefondan o'chiriladi. Shunda u qidiruvda umuman chiqmaydi!"}
+                  </Text>
+                  <Pressable
+                    style={styles.backupBtn}
+                    onPress={() => handleBackupAndUninstall(selectedTargetApp)}
+                  >
+                    <Ionicons name="cloud-download-outline" size={18} color="#FFF" />
+                    <Text style={styles.backupBtnText}>
+                      {"APK Zaxiralash va Telefondan O'chirish"}
+                    </Text>
+                  </Pressable>
+                </View>
+              )}
 
-              <View style={styles.guideSection}>
-                <Text style={styles.guideBrand}>OPPO / Realme / OnePlus / Vivo:</Text>
-                <Text style={styles.guideStep}>
-                  1. <Text style={{ color: '#FF9500' }}>Sozlamalar → Maxfiylik (Privacy) → Ilovalarni yashirish (Hide apps)</Text>.
+              {/* Method 3: Device Owner ADB */}
+              <View style={styles.guideCard}>
+                <View style={styles.guideCardHeader}>
+                  <View style={[styles.methodBadge, { backgroundColor: '#0A84FF' }]}>
+                    <Text style={styles.methodBadgeText}>3-USUL: TIZIMLI DEVICE OWNER</Text>
+                  </View>
+                  <Text style={styles.guideCardTitle}>Avtomatik Tizimli Yashirish</Text>
+                </View>
+                <Text style={styles.guideCardDesc}>
+                  {"Calculatorga Device Owner ruxsati berilsa, ilovalar hech qanday sozlamasiz to'g'ridan-to'g'ri tizimdan va qidiruvdan yo'qoladi."}
                 </Text>
-                <Text style={styles.guideStep}>
-                  2. Yashirmoqchi bo'lgan ilovani tanlang.
-                </Text>
-              </View>
-
-              <View style={styles.guideSection}>
-                <Text style={styles.guideBrand}>Ixtiyoriy Android telefonda (Disable):</Text>
-                <Text style={styles.guideStep}>
-                  Ilova ma'lumotlari (App Info) ga kirib <Text style={{ color: '#FF453A' }}>"O'chirish" (Disable)</Text> yoki bildirishnomalarni o'chirib qo'yish mumkin.
-                </Text>
+                <View style={styles.codeBox}>
+                  <Text style={styles.codeText} selectable numberOfLines={2}>
+                    {deviceOwnerCommand}
+                  </Text>
+                </View>
+                <Pressable
+                  style={styles.copyBtn}
+                  onPress={() => {
+                    Share.share({
+                      message: deviceOwnerCommand,
+                      title: 'Device Owner ADB Buyrug\'i',
+                    });
+                  }}
+                >
+                  <Ionicons name="share-social-outline" size={16} color="#0A84FF" />
+                  <Text style={styles.copyBtnText}>Buyruqni yuborish / saqlash</Text>
+                </Pressable>
               </View>
             </ScrollView>
 
             <View style={styles.guideActions}>
-              {targetGuideApp && (
-                <Pressable
-                  style={styles.guideAppInfoBtn}
-                  onPress={() => {
-                    openAppInfo(targetGuideApp.packageName);
-                    setShowGuideModal(false);
-                  }}
-                >
-                  <Ionicons name="settings-outline" size={18} color="#FFF" />
-                  <Text style={styles.guideAppInfoBtnText}>
-                    Ilova tizim sozlamalarini ochish
-                  </Text>
-                </Pressable>
-              )}
-
               <Pressable
                 style={styles.guideCloseBtn}
-                onPress={() => setShowGuideModal(false)}
+                onPress={() => setShowAssistantModal(false)}
               >
-                <Text style={styles.guideCloseBtnText}>Tushunarli</Text>
+                <Text style={styles.guideCloseBtnText}>Yopish</Text>
               </Pressable>
             </View>
           </View>
@@ -868,11 +1023,45 @@ const styles = StyleSheet.create({
     fontWeight: '700',
     color: '#000',
   },
+  statusBanner: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    backgroundColor: '#161622',
+    marginHorizontal: 16,
+    marginBottom: 8,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: 'rgba(255,149,0,0.2)',
+  },
+  statusBannerTitle: {
+    fontSize: 13,
+    fontWeight: '700',
+    color: '#FFFFFF',
+  },
+  statusBannerSub: {
+    fontSize: 11,
+    color: '#8E8E93',
+    marginTop: 1,
+  },
+  statusBannerBtn: {
+    backgroundColor: '#FF9500',
+    paddingHorizontal: 10,
+    paddingVertical: 5,
+    borderRadius: 6,
+  },
+  statusBannerBtnText: {
+    fontSize: 11,
+    fontWeight: '700',
+    color: '#000',
+  },
   tabSwitcher: {
     flexDirection: 'row',
     backgroundColor: '#1C1C1E',
     marginHorizontal: 16,
-    marginVertical: 10,
+    marginVertical: 8,
     borderRadius: 12,
     padding: 3,
   },
@@ -948,15 +1137,12 @@ const styles = StyleSheet.create({
   appIconFallback: {
     width: 48,
     height: 48,
-    borderRadius: 12,
-    backgroundColor: 'rgba(255,149,0,0.15)',
+    backgroundColor: '#2C2C2E',
     alignItems: 'center',
     justifyContent: 'center',
-    borderWidth: 1,
-    borderColor: 'rgba(255,149,0,0.3)',
   },
   appIconFallbackText: {
-    fontSize: 22,
+    fontSize: 20,
     fontWeight: '700',
     color: '#FF9500',
   },
@@ -965,43 +1151,58 @@ const styles = StyleSheet.create({
     gap: 2,
   },
   appNameText: {
-    fontSize: 15,
+    fontSize: 16,
     fontWeight: '600',
     color: '#FFFFFF',
   },
   appPackageText: {
-    fontSize: 12,
-    color: '#8E8E93',
+    fontSize: 11,
+    color: '#636366',
   },
   badgeRow: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: 6,
-    marginTop: 2,
+    marginTop: 4,
   },
   shieldBadge: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 3,
-    backgroundColor: 'rgba(255,149,0,0.12)',
+    gap: 4,
+    backgroundColor: 'rgba(255,149,0,0.15)',
     paddingHorizontal: 6,
-    paddingVertical: 1.5,
+    paddingVertical: 2,
     borderRadius: 4,
   },
   shieldBadgeText: {
     fontSize: 10,
-    fontWeight: '700',
     color: '#FF9500',
+    fontWeight: '600',
   },
-  systemBadge: {
-    backgroundColor: 'rgba(142,142,147,0.15)',
+  systemHiddenBadge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    backgroundColor: 'rgba(48,209,88,0.15)',
     paddingHorizontal: 6,
-    paddingVertical: 1.5,
+    paddingVertical: 2,
     borderRadius: 4,
   },
-  systemBadgeText: {
+  systemHiddenBadgeText: {
     fontSize: 10,
-    color: '#8E8E93',
+    color: '#30D158',
+    fontWeight: '700',
+  },
+  apkSavedBadge: {
+    backgroundColor: 'rgba(61,220,132,0.15)',
+    paddingHorizontal: 6,
+    paddingVertical: 2,
+    borderRadius: 4,
+  },
+  apkSavedBadgeText: {
+    fontSize: 10,
+    color: '#3ddc84',
+    fontWeight: '600',
   },
   appRightActions: {
     flexDirection: 'row',
@@ -1015,11 +1216,11 @@ const styles = StyleSheet.create({
     backgroundColor: '#FF9500',
     paddingHorizontal: 12,
     paddingVertical: 6,
-    borderRadius: 14,
+    borderRadius: 8,
   },
   launchBtnText: {
     color: '#000',
-    fontSize: 12,
+    fontSize: 13,
     fontWeight: '700',
   },
   moreBtn: {
@@ -1030,22 +1231,26 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     paddingVertical: 12,
     gap: 12,
+    backgroundColor: '#1C1C1E',
+    paddingHorizontal: 12,
+    borderRadius: 12,
+    marginVertical: 4,
   },
   center: {
     flex: 1,
     alignItems: 'center',
     justifyContent: 'center',
-    paddingHorizontal: 32,
-    gap: 10,
+    paddingHorizontal: 24,
+    gap: 12,
   },
   emptyIconWrapper: {
     width: 90,
     height: 90,
-    borderRadius: 24,
+    borderRadius: 45,
     backgroundColor: 'rgba(255,149,0,0.1)',
     alignItems: 'center',
     justifyContent: 'center',
-    marginBottom: 4,
+    marginBottom: 8,
   },
   emptyTitle: {
     fontSize: 18,
@@ -1063,27 +1268,27 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     gap: 8,
+    marginTop: 12,
     backgroundColor: '#FF9500',
-    paddingHorizontal: 18,
+    paddingHorizontal: 20,
     paddingVertical: 12,
-    borderRadius: 14,
-    marginTop: 10,
+    borderRadius: 12,
   },
   emptyAddBtnText: {
-    fontSize: 14,
-    fontWeight: '700',
     color: '#000',
+    fontWeight: '700',
+    fontSize: 14,
   },
   fab: {
     position: 'absolute',
     bottom: 24,
     right: 20,
-    width: 58,
-    height: 58,
-    borderRadius: 29,
+    width: 56,
+    height: 56,
+    borderRadius: 28,
     backgroundColor: '#FF9500',
-    justifyContent: 'center',
     alignItems: 'center',
+    justifyContent: 'center',
     elevation: 8,
     shadowColor: '#FF9500',
     shadowOffset: { width: 0, height: 4 },
@@ -1091,10 +1296,8 @@ const styles = StyleSheet.create({
     shadowRadius: 8,
   },
   fabPressed: {
-    transform: [{ scale: 0.94 }],
+    transform: [{ scale: 0.95 }],
   },
-
-  // Modal styles
   modalContainer: {
     flex: 1,
     backgroundColor: '#0a0a14',
@@ -1113,19 +1316,19 @@ const styles = StyleSheet.create({
     minWidth: 50,
   },
   modalTitle: {
-    fontSize: 17,
+    fontSize: 16,
     fontWeight: '700',
     color: '#FFFFFF',
   },
   modalSubtitle: {
     fontSize: 12,
     color: '#8E8E93',
-    marginTop: 2,
+    marginTop: 1,
   },
   modalSelectAllText: {
-    color: '#FF9500',
     fontSize: 14,
-    fontWeight: '700',
+    fontWeight: '600',
+    color: '#FF9500',
     textAlign: 'right',
   },
   modalSearchBar: {
@@ -1142,17 +1345,19 @@ const styles = StyleSheet.create({
   filterChipsRow: {
     flexDirection: 'row',
     paddingHorizontal: 16,
-    marginBottom: 8,
     gap: 8,
+    marginBottom: 8,
   },
   chip: {
     paddingHorizontal: 12,
     paddingVertical: 6,
-    borderRadius: 16,
+    borderRadius: 8,
     backgroundColor: '#1C1C1E',
   },
   chipActive: {
-    backgroundColor: '#FF9500',
+    backgroundColor: 'rgba(255,149,0,0.2)',
+    borderWidth: 1,
+    borderColor: '#FF9500',
   },
   chipText: {
     fontSize: 12,
@@ -1160,42 +1365,36 @@ const styles = StyleSheet.create({
     fontWeight: '600',
   },
   chipTextActive: {
-    color: '#000',
-    fontWeight: '700',
-  },
-  loadingText: {
-    color: '#8E8E93',
-    fontSize: 14,
-    marginTop: 8,
+    color: '#FF9500',
   },
   installItem: {
     flexDirection: 'row',
     alignItems: 'center',
     paddingHorizontal: 16,
-    paddingVertical: 12,
+    paddingVertical: 10,
     gap: 12,
   },
   installItemSelected: {
     backgroundColor: 'rgba(255,149,0,0.08)',
   },
   installItemDisabled: {
-    opacity: 0.5,
+    opacity: 0.4,
   },
   alreadyHiddenText: {
     fontSize: 11,
-    color: '#FF9500',
+    color: '#30D158',
     fontWeight: '600',
   },
   systemAppText: {
     fontSize: 11,
-    color: '#8E8E93',
+    color: '#636366',
   },
   checkbox: {
-    width: 24,
-    height: 24,
+    width: 22,
+    height: 22,
     borderRadius: 6,
     borderWidth: 1.5,
-    borderColor: '#48484A',
+    borderColor: '#636366',
     alignItems: 'center',
     justifyContent: 'center',
   },
@@ -1204,8 +1403,8 @@ const styles = StyleSheet.create({
     borderColor: '#FF9500',
   },
   checkboxDisabled: {
-    backgroundColor: '#2C2C2E',
     borderColor: '#3A3A3C',
+    backgroundColor: '#2C2C2E',
   },
   modalBottomBar: {
     position: 'absolute',
@@ -1213,8 +1412,7 @@ const styles = StyleSheet.create({
     left: 0,
     right: 0,
     paddingHorizontal: 16,
-    paddingTop: 12,
-    paddingBottom: 24,
+    paddingVertical: 12,
     backgroundColor: '#12121E',
     borderTopWidth: 0.5,
     borderTopColor: '#2C2C2E',
@@ -1224,106 +1422,169 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
     gap: 8,
-    height: 50,
-    borderRadius: 14,
     backgroundColor: '#FF9500',
+    height: 48,
+    borderRadius: 12,
   },
   confirmHideBtnDisabled: {
     backgroundColor: '#2C2C2E',
-    opacity: 0.6,
+    opacity: 0.5,
   },
   confirmHideBtnText: {
     color: '#000',
-    fontSize: 15,
     fontWeight: '700',
+    fontSize: 15,
   },
-
-  // Guide styles
+  loadingText: {
+    color: '#8E8E93',
+    fontSize: 14,
+  },
   guideOverlay: {
     flex: 1,
-    backgroundColor: 'rgba(0,0,0,0.75)',
+    backgroundColor: 'rgba(0,0,0,0.7)',
     justifyContent: 'flex-end',
   },
   guideContent: {
-    backgroundColor: '#1C1C1E',
+    backgroundColor: '#161622',
     borderTopLeftRadius: 24,
     borderTopRightRadius: 24,
-    padding: 20,
-    maxHeight: '80%',
+    paddingHorizontal: 20,
+    paddingTop: 20,
+    paddingBottom: 30,
+    maxHeight: '85%',
   },
   guideHeader: {
     alignItems: 'center',
     marginBottom: 16,
   },
   guideIconBox: {
-    width: 54,
-    height: 54,
-    borderRadius: 27,
-    backgroundColor: 'rgba(255,149,0,0.12)',
+    width: 56,
+    height: 56,
+    borderRadius: 28,
+    backgroundColor: 'rgba(255,149,0,0.15)',
     alignItems: 'center',
     justifyContent: 'center',
-    marginBottom: 8,
+    marginBottom: 10,
   },
   guideTitle: {
-    fontSize: 18,
+    fontSize: 20,
     fontWeight: '700',
     color: '#FFFFFF',
+    textAlign: 'center',
   },
   guideSubtitle: {
     fontSize: 13,
     color: '#8E8E93',
     textAlign: 'center',
-    marginTop: 2,
+    marginTop: 4,
+    lineHeight: 18,
   },
   guideBody: {
     marginBottom: 16,
   },
-  guideSection: {
-    backgroundColor: '#2C2C2E',
-    padding: 12,
-    borderRadius: 10,
-    marginBottom: 10,
+  guideCard: {
+    backgroundColor: '#1F1F2E',
+    borderRadius: 14,
+    padding: 14,
+    marginBottom: 12,
+    gap: 8,
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.06)',
   },
-  guideBrand: {
-    fontSize: 14,
+  guideCardHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+  },
+  methodBadge: {
+    backgroundColor: '#FF9500',
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+    borderRadius: 6,
+  },
+  methodBadgeText: {
+    color: '#000',
+    fontSize: 10,
+    fontWeight: '800',
+  },
+  guideCardTitle: {
+    fontSize: 15,
     fontWeight: '700',
     color: '#FFFFFF',
-    marginBottom: 4,
   },
-  guideStep: {
+  guideCardDesc: {
     fontSize: 12,
-    color: '#D1D1D6',
-    lineHeight: 18,
+    color: '#8E8E93',
+    lineHeight: 16,
   },
-  guideActions: {
-    gap: 10,
-  },
-  guideAppInfoBtn: {
+  oemLaunchBtn: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
-    gap: 8,
+    gap: 6,
+    backgroundColor: '#FF9500',
+    paddingVertical: 10,
+    borderRadius: 10,
+    marginTop: 4,
+  },
+  oemLaunchBtnText: {
+    color: '#000',
+    fontWeight: '700',
+    fontSize: 13,
+  },
+  backupBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 6,
+    backgroundColor: '#3ddc84',
+    paddingVertical: 10,
+    borderRadius: 10,
+    marginTop: 4,
+  },
+  backupBtnText: {
+    color: '#000',
+    fontWeight: '700',
+    fontSize: 13,
+  },
+  codeBox: {
+    backgroundColor: '#0a0a14',
+    padding: 10,
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: '#2C2C2E',
+  },
+  codeText: {
+    color: '#30D158',
+    fontSize: 11,
+    fontFamily: 'monospace',
+  },
+  copyBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 6,
+    paddingVertical: 8,
+    backgroundColor: 'rgba(10,132,255,0.15)',
+    borderRadius: 8,
+  },
+  copyBtnText: {
+    color: '#0A84FF',
+    fontSize: 12,
+    fontWeight: '600',
+  },
+  guideActions: {
+    paddingTop: 8,
+  },
+  guideCloseBtn: {
     backgroundColor: '#2C2C2E',
     paddingVertical: 12,
     borderRadius: 12,
-    borderWidth: 1,
-    borderColor: '#3A3A3C',
-  },
-  guideAppInfoBtnText: {
-    color: '#FFFFFF',
-    fontSize: 14,
-    fontWeight: '600',
-  },
-  guideCloseBtn: {
     alignItems: 'center',
-    justifyContent: 'center',
-    backgroundColor: '#FF9500',
-    paddingVertical: 14,
-    borderRadius: 12,
   },
   guideCloseBtnText: {
-    color: '#000',
+    color: '#FFFFFF',
+    fontWeight: '600',
     fontSize: 15,
-    fontWeight: '700',
   },
 });

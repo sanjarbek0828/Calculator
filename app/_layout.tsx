@@ -13,7 +13,7 @@ import { useEffect, useRef } from 'react';
 import { AppState, Platform, type AppStateStatus, StatusBar } from 'react-native';
 import { Stack, useRouter, useSegments } from 'expo-router';
 import * as ScreenCapture from 'expo-screen-capture';
-import { useVaultStore } from '../src/store/vaultStore';
+import { useVaultStore, isAutoLockSuspendedSync } from '../src/store/vaultStore';
 import { useVaultAuth } from '../src/hooks/useVaultAuth';
 import { ensureVaultDirs } from '../src/services/vaultStorage';
 
@@ -31,23 +31,6 @@ export default function RootLayout() {
     ensureVaultDirs();
   }, []);
 
-  // Use a ref for isPickingMedia so the AppState callback always sees
-  // the latest value without needing to re-subscribe the listener.
-  const isPickingMediaRef = useRef(false);
-
-  // Subscribe to pickingMediaCount changes and keep ref in sync
-  const pickingMediaCount = useVaultStore((s) => s.pickingMediaCount);
-  useEffect(() => {
-    isPickingMediaRef.current = pickingMediaCount > 0;
-  }, [pickingMediaCount]);
-
-  // Keep isVaultOpen in a ref too, so the AppState handler always
-  // sees the latest value without re-registering the listener.
-  const isVaultOpenRef = useRef(isVaultOpen);
-  useEffect(() => {
-    isVaultOpenRef.current = isVaultOpen;
-  }, [isVaultOpen]);
-
   // ── Auto-lock: return to calculator when app goes to background ──
   useEffect(() => {
     const subscription = AppState.addEventListener(
@@ -56,21 +39,24 @@ export default function RootLayout() {
         const prev = appState.current;
         appState.current = nextState;
 
-        // Only lock when transitioning FROM active TO background/inactive
-        if (
-          prev === 'active' &&
-          (nextState === 'background' || nextState === 'inactive')
-        ) {
-          // CRITICAL: Do NOT lock if user is picking media from gallery.
-          // On iOS, opening the system photo picker causes the app to go
-          // "inactive" briefly. On Android, it may go to "background".
-          // The pickingMediaCount counter tracks this safely.
-          if (isPickingMediaRef.current) {
-            return;
-          }
+        // Synchronously check if auto-lock is currently suspended
+        // (e.g., photo picker, document picker, permission dialog, delete confirmation)
+        if (isAutoLockSuspendedSync()) {
+          return;
+        }
 
-          // Vault is open and we're going to background — lock it
-          if (isVaultOpenRef.current) {
+        // On Android, "inactive" occurs whenever ANY system dialog (permission request,
+        // file chooser, delete confirmation prompt, notification pull-down) appears.
+        // Locking on "inactive" on Android causes instant crashes/lockouts!
+        // Therefore, on Android we only lock when truly transitioning to "background".
+        const isLockTransition =
+          Platform.OS === 'ios'
+            ? prev === 'active' && (nextState === 'background' || nextState === 'inactive')
+            : nextState === 'background';
+
+        if (isLockTransition) {
+          // Check synchronous vault state directly from Zustand
+          if (useVaultStore.getState().isVaultOpen) {
             closeVault();
             router.replace('/');
           }
@@ -79,7 +65,6 @@ export default function RootLayout() {
     );
 
     return () => subscription.remove();
-    // Only depend on stable references — closeVault and router
   }, [closeVault, router]);
 
   // ── Screenshot prevention ─────────────────────────────────────
