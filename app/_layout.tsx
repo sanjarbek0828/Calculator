@@ -17,6 +17,7 @@ import { useVaultStore, isAutoLockSuspendedSync } from '../src/store/vaultStore'
 import { useVaultAuth } from '../src/hooks/useVaultAuth';
 import { ensureVaultDirs } from '../src/services/vaultStorage';
 import { reApplySystemHiding } from '../src/services/vaultAppsService';
+import { clearVolatileCacheNative } from '../modules/installed-apps';
 
 export default function RootLayout() {
   const router = useRouter();
@@ -44,25 +45,20 @@ export default function RootLayout() {
           reApplySystemHiding();
         }
 
-        // Synchronously check if auto-lock is currently suspended
-        // (e.g., photo picker, document picker, permission dialog, delete confirmation)
-        if (isAutoLockSuspendedSync()) {
-          return;
-        }
+        // On leaving Calculator (Home button, App Switcher, Screen Off, Recents):
+        // Automatically and immediately lock back to Calculator screen.
+        // The ONLY exception is if an external system file picker is explicitly open.
+        const isExternalPicker = useVaultStore.getState().isExternalPickerActive;
 
-        // On Android, "inactive" occurs whenever ANY system dialog (permission request,
-        // file chooser, delete confirmation prompt, notification pull-down) appears.
-        // Locking on "inactive" on Android causes instant crashes/lockouts!
-        // Therefore, on Android we only lock when truly transitioning to "background".
         const isLockTransition =
           Platform.OS === 'ios'
             ? prev === 'active' && (nextState === 'background' || nextState === 'inactive')
             : nextState === 'background';
 
-        if (isLockTransition) {
-          // Check synchronous vault state directly from Zustand
+        if (isLockTransition && !isExternalPicker) {
           if (useVaultStore.getState().isVaultOpen) {
             closeVault();
+            clearVolatileCacheNative().catch(() => {});
             router.replace('/');
           }
         }

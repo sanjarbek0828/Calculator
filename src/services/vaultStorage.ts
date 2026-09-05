@@ -19,12 +19,19 @@
 import * as FileSystem from 'expo-file-system/legacy';
 import * as Crypto from 'expo-crypto';
 import * as MediaLibrary from 'expo-media-library';
+import * as SecureStore from 'expo-secure-store';
 import { Platform } from 'react-native';
 import { useVaultStore } from '../store/vaultStore';
 import {
   deleteGalleryMediaNative,
   hasManageExternalStoragePermissionNative,
   requestManageExternalStoragePermissionNative,
+  encryptFileNative,
+  decryptFileNative,
+  decryptImageToBase64Native,
+  decryptToCacheNative,
+  deleteTempFileNative,
+  clearVolatileCacheNative,
   type MediaDeleteItem,
 } from '../../modules/installed-apps';
 
@@ -39,7 +46,7 @@ export interface VaultFile {
   originalName: string;
   /** Path inside the vault directory */
   vaultPath: string;
-  /** URI for rendering (file:// prefixed) */
+  /** URI for rendering (file:// prefixed or base64) */
   uri: string;
   /** MIME type or file extension */
   mimeType: string;
@@ -49,6 +56,8 @@ export interface VaultFile {
   importedAt: number;
   /** File size in bytes */
   sizeBytes: number;
+  /** Whether the file is strongly encrypted with AES-256 on disk */
+  isEncrypted?: boolean;
 }
 
 // ── Directory paths ─────────────────────────────────────────────────
@@ -144,6 +153,102 @@ async function writeIndex(
 async function randomHash(): Promise<string> {
   const bytes = await Crypto.getRandomBytesAsync(16);
   return Array.from(bytes, (b) => b.toString(16).padStart(2, '0')).join('');
+}
+
+/**
+ * Master AES-256 Key Management via Expo SecureStore
+ */
+const MASTER_KEY_STORAGE_KEY = 'vault_aes_master_key_v1';
+let cachedMasterKey: string | null = null;
+
+export async function getMasterKey(): Promise<string> {
+  if (cachedMasterKey) return cachedMasterKey;
+  try {
+    let key = await SecureStore.getItemAsync(MASTER_KEY_STORAGE_KEY);
+    if (!key) {
+      const bytes = await Crypto.getRandomBytesAsync(32);
+      key = Array.from(bytes, (b) => b.toString(16).padStart(2, '0')).join('');
+      await SecureStore.setItemAsync(MASTER_KEY_STORAGE_KEY, key);
+    }
+    cachedMasterKey = key;
+    return key;
+  } catch (err) {
+    if (!cachedMasterKey) {
+      const bytes = await Crypto.getRandomBytesAsync(32);
+      cachedMasterKey = Array.from(bytes, (b) => b.toString(16).padStart(2, '0')).join('');
+    }
+    return cachedMasterKey;
+  }
+}
+
+// In-memory cache for decrypted image Base64 strings (never saved to disk)
+const decryptedImageCache = new Map<string, string>();
+
+/**
+ * Purge in-memory image cache and temp decrypted playback files
+ */
+export function clearDecryptedCache(): void {
+  decryptedImageCache.clear();
+  clearVolatileCacheNative().catch(() => {});
+}
+
+/**
+ * Decrypt an encrypted image in-memory to base64 for instant display.
+ * Decrypted bytes are NEVER written to disk!
+ */
+export async function getDecryptedImageUri(file: VaultFile): Promise<string> {
+  if (Platform.OS === 'web' || !file.isEncrypted) {
+    return file.uri;
+  }
+  if (decryptedImageCache.has(file.id)) {
+    return decryptedImageCache.get(file.id)!;
+  }
+  try {
+    const key = await getMasterKey();
+    const base64Uri = await decryptImageToBase64Native(file.vaultPath, key, file.mimeType);
+    if (base64Uri) {
+      if (decryptedImageCache.size > 80) {
+        const firstKey = decryptedImageCache.keys().next().value;
+        if (firstKey) decryptedImageCache.delete(firstKey);
+      }
+      decryptedImageCache.set(file.id, base64Uri);
+      return base64Uri;
+    }
+  } catch (err) {
+    console.warn('Decryption failed for image:', err);
+  }
+  return file.uri;
+}
+
+/**
+ * Decrypt an encrypted video to a volatile temporary cache file for playback.
+ * Returns the URI and a cleanup callback that deletes the temp file immediately.
+ */
+export async function getDecryptedVideoPlaybackUri(
+  file: VaultFile
+): Promise<{ uri: string; cleanup: () => Promise<void> }> {
+  if (Platform.OS === 'web' || !file.isEncrypted) {
+    return { uri: file.uri, cleanup: async () => {} };
+  }
+  try {
+    const key = await getMasterKey();
+    const tempUri = await decryptToCacheNative(file.vaultPath, key, file.originalName);
+    if (tempUri) {
+      return {
+        uri: tempUri,
+        cleanup: async () => {
+          try {
+            await deleteTempFileNative(tempUri);
+          } catch {
+            // Ignore cleanup error
+          }
+        },
+      };
+    }
+  } catch (err) {
+    console.warn('Decryption failed for video:', err);
+  }
+  return { uri: file.uri, cleanup: async () => {} };
 }
 
 /**
@@ -394,18 +499,30 @@ export async function importFile(
   assetId?: string | null
 ): Promise<VaultFile> {
   if (Platform.OS === 'web') {
-    return { id: 'test', originalName: 'test', vaultPath: '', uri: '', mimeType: '', type, importedAt: Date.now(), sizeBytes: 0 };
+    return { id: 'test', originalName: 'test', vaultPath: '', uri: '', mimeType: '', type, importedAt: Date.now(), sizeBytes: 0, isEncrypted: false };
   }
   await ensureVaultDirs();
 
   // Generate a random hash filename — strips any identifying info
   const hash = await randomHash();
   const ext = getExtension(originalName || sourceUri);
-  const fileName = `${hash}${ext}`;
+  // Encrypted vault files use .enc so external file managers & gallery scanners cannot open or identify them
+  const fileName = `${hash}.enc`;
   const destPath = `${DIRS[type]}${fileName}`;
 
-  // Copy the file into the vault's private sandbox
-  await FileSystem.copyAsync({ from: sourceUri, to: destPath });
+  let isEncrypted = false;
+  try {
+    const key = await getMasterKey();
+    const ok = await encryptFileNative(sourceUri, destPath, key);
+    if (ok) {
+      isEncrypted = true;
+    } else {
+      await FileSystem.copyAsync({ from: sourceUri, to: destPath });
+    }
+  } catch (encErr) {
+    console.warn('Native encryption failed, falling back to copy:', encErr);
+    await FileSystem.copyAsync({ from: sourceUri, to: destPath });
+  }
 
   // Get file info for size
   const fileInfo = await FileSystem.getInfoAsync(destPath);
@@ -420,16 +537,13 @@ export async function importFile(
     type,
     importedAt: Date.now(),
     sizeBytes: (fileInfo as any).size || 0,
+    isEncrypted,
   };
 
   // Update the index
   const index = await readIndex(type);
   index.unshift(entry); // newest first
   await writeIndex(type, index);
-
-  // We no longer trigger deletion here.
-  // The caller (UI) should collect all imported asset IDs and delete them in bulk
-  // using deleteOriginalsFromGallery() so we only get one permission prompt.
 
   return entry;
 }
@@ -467,7 +581,7 @@ export async function deleteFile(
 }
 
 /**
- * Export a file from the vault back to the device gallery.
+ * Export a file from the vault back to the device gallery (decrypting first if needed).
  */
 export async function exportFile(
   type: VaultFileType,
@@ -482,23 +596,45 @@ export async function exportFile(
     const { status } = await MediaLibrary.requestPermissionsAsync();
     if (status !== 'granted') return false;
 
-    if (type === 'photos' || type === 'videos') {
-      await MediaLibrary.createAssetAsync(entry.vaultPath);
-      return true;
+    let exportSourcePath = entry.vaultPath;
+    let tempDecryptedPath: string | null = null;
+
+    if (entry.isEncrypted) {
+      const key = await getMasterKey();
+      tempDecryptedPath = await decryptToCacheNative(
+        entry.vaultPath,
+        key,
+        entry.originalName
+      );
+      if (tempDecryptedPath) {
+        exportSourcePath = tempDecryptedPath;
+      }
     }
 
-    // For documents, copy to a shareable location
-    const shareDir = `${FileSystem.cacheDirectory}export/`;
-    const shareInfo = await FileSystem.getInfoAsync(shareDir);
-    if (!shareInfo.exists) {
-      await FileSystem.makeDirectoryAsync(shareDir, { intermediates: true });
+    try {
+      if (type === 'photos' || type === 'videos') {
+        await MediaLibrary.createAssetAsync(exportSourcePath);
+        return true;
+      }
+
+      // For documents, copy to a shareable location
+      const shareDir = `${FileSystem.cacheDirectory}export/`;
+      const shareInfo = await FileSystem.getInfoAsync(shareDir);
+      if (!shareInfo.exists) {
+        await FileSystem.makeDirectoryAsync(shareDir, { intermediates: true });
+      }
+      await FileSystem.copyAsync({
+        from: exportSourcePath,
+        to: `${shareDir}${entry.originalName}`,
+      });
+      return true;
+    } finally {
+      if (tempDecryptedPath) {
+        await deleteTempFileNative(tempDecryptedPath);
+      }
     }
-    await FileSystem.copyAsync({
-      from: entry.vaultPath,
-      to: `${shareDir}${entry.originalName}`,
-    });
-    return true;
-  } catch {
+  } catch (err) {
+    console.warn('exportFile error:', err);
     return false;
   }
 }

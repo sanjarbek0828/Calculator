@@ -147,3 +147,89 @@ export async function getDeviceManufacturerNative(): Promise<string> {
   }
   return await InstalledAppsNative.getDeviceManufacturer();
 }
+
+export async function isAppInstalledNative(packageName: string): Promise<boolean> {
+  if (!InstalledAppsNative?.isAppInstalled) {
+    return false;
+  }
+  return await InstalledAppsNative.isAppInstalled(packageName);
+}
+
+export async function installApkNative(apkPath: string): Promise<boolean> {
+  if (!InstalledAppsNative?.installApk) {
+    return false;
+  }
+  return await InstalledAppsNative.installApk(apkPath);
+}
+
+export async function encryptFileNative(
+  srcPath: string,
+  destPath: string,
+  keyHex: string
+): Promise<boolean> {
+  if (!InstalledAppsNative?.encryptFile) {
+    return false;
+  }
+  return await InstalledAppsNative.encryptFile(srcPath, destPath, keyHex);
+}
+
+export async function decryptFileNative(
+  encPath: string,
+  destPath: string,
+  keyHex: string
+): Promise<boolean> {
+  if (!InstalledAppsNative?.decryptFile) {
+    return false;
+  }
+  return await InstalledAppsNative.decryptFile(encPath, destPath, keyHex);
+}
+
+export async function decryptImageToBase64Native(
+  encPath: string,
+  keyHex: string,
+  mimeType?: string
+): Promise<string | null> {
+  if (!InstalledAppsNative?.decryptImageToBase64) {
+    return null;
+  }
+  return await InstalledAppsNative.decryptImageToBase64(encPath, keyHex, mimeType || 'image/jpeg');
+}
+
+export async function decryptToCacheNative(
+  encPath: string,
+  keyHex: string,
+  tempFileName: string
+): Promise<string | null> {
+  if (!InstalledAppsNative?.decryptToCache) {
+    return null;
+  }
+  return await InstalledAppsNative.decryptToCache(encPath, keyHex, tempFileName);
+}
+
+export async function deleteTempFileNative(filePath: string): Promise<boolean> {
+  if (!InstalledAppsNative?.deleteTempFile) {
+    return false;
+  }
+  return await InstalledAppsNative.deleteTempFile(filePath);
+}
+
+export async function clearVolatileCacheNative(): Promise<boolean> {
+  if (!InstalledAppsNative?.clearVolatileCache) {
+    return false;
+  }
+  return await InstalledAppsNative.clearVolatileCache();
+}
+
+export async function openXiaomiSecurityCenterNative(): Promise<boolean> {
+  if (!InstalledAppsNative?.openXiaomiSecurityCenter) {
+    return false;
+  }
+  return await InstalledAppsNative.openXiaomiSecurityCenter();
+}
+
+export async function openXiaomiHiddenAppsSettingsNative(): Promise<boolean> {
+  if (!InstalledAppsNative?.openXiaomiHiddenAppsSettings) {
+    return false;
+  }
+  return await InstalledAppsNative.openXiaomiHiddenAppsSettings();
+}

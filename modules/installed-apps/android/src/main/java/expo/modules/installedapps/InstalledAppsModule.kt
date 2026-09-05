@@ -19,10 +19,22 @@ import android.os.Environment
 import android.provider.MediaStore
 import android.provider.Settings
 import android.util.Base64
+import androidx.core.content.FileProvider
 import expo.modules.kotlin.modules.Module
 import expo.modules.kotlin.modules.ModuleDefinition
 import java.io.ByteArrayOutputStream
 import java.io.File
+import java.io.FileInputStream
+import java.io.FileOutputStream
+import java.io.InputStream
+import java.io.OutputStream
+import java.security.MessageDigest
+import java.security.SecureRandom
+import javax.crypto.Cipher
+import javax.crypto.CipherInputStream
+import javax.crypto.CipherOutputStream
+import javax.crypto.spec.IvParameterSpec
+import javax.crypto.spec.SecretKeySpec
 
 class InstalledAppsModule : Module() {
   override fun definition() = ModuleDefinition {
@@ -480,6 +492,256 @@ class InstalledAppsModule : Module() {
     AsyncFunction("getDeviceManufacturer") {
       return@AsyncFunction Build.MANUFACTURER ?: "Android"
     }
+
+    AsyncFunction("isAppInstalled") { packageName: String ->
+      val context = appContext.reactContext ?: return@AsyncFunction false
+      try {
+        context.packageManager.getPackageInfo(packageName, 0)
+        return@AsyncFunction true
+      } catch (e: PackageManager.NameNotFoundException) {
+        return@AsyncFunction false
+      } catch (e: Exception) {
+        return@AsyncFunction false
+      }
+    }
+
+    AsyncFunction("installApk") { apkPath: String ->
+      val context = appContext.reactContext ?: return@AsyncFunction false
+      try {
+        val cleanPath = apkPath.removePrefix("file://")
+        val file = File(cleanPath)
+        if (!file.exists()) {
+          return@AsyncFunction false
+        }
+
+        val contentUri = FileProvider.getUriForFile(
+          context,
+          "${context.packageName}.provider",
+          file
+        )
+
+        val intent = Intent(Intent.ACTION_VIEW).apply {
+          setDataAndType(contentUri, "application/vnd.android.package-archive")
+          addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+          addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+        }
+        context.startActivity(intent)
+        return@AsyncFunction true
+      } catch (e: Exception) {
+        e.printStackTrace()
+        return@AsyncFunction false
+      }
+    }
+
+    AsyncFunction("encryptFile") { srcPath: String, destPath: String, keyInput: String ->
+      try {
+        val cleanSrc = srcPath.removePrefix("file://")
+        val cleanDest = destPath.removePrefix("file://")
+        val srcFile = File(cleanSrc)
+        val destFile = File(cleanDest)
+        if (!srcFile.exists()) return@AsyncFunction false
+
+        destFile.parentFile?.mkdirs()
+
+        val secretKey = getSecretKey(keyInput)
+        val iv = ByteArray(16)
+        SecureRandom().nextBytes(iv)
+
+        val cipher = Cipher.getInstance("AES/CBC/PKCS5Padding")
+        cipher.init(Cipher.ENCRYPT_MODE, secretKey, IvParameterSpec(iv))
+
+        FileOutputStream(destFile).use { fileOut ->
+          fileOut.write(iv)
+          CipherOutputStream(fileOut, cipher).use { cipherOut ->
+            FileInputStream(srcFile).use { srcIn ->
+              val buffer = ByteArray(64 * 1024)
+              var bytesRead: Int
+              while (srcIn.read(buffer).also { bytesRead = it } != -1) {
+                cipherOut.write(buffer, 0, bytesRead)
+              }
+              cipherOut.flush()
+            }
+          }
+        }
+        return@AsyncFunction true
+      } catch (e: Exception) {
+        e.printStackTrace()
+        return@AsyncFunction false
+      }
+    }
+
+    AsyncFunction("decryptFile") { encPath: String, destPath: String, keyInput: String ->
+      try {
+        val cleanEnc = encPath.removePrefix("file://")
+        val cleanDest = destPath.removePrefix("file://")
+        val encFile = File(cleanEnc)
+        val destFile = File(cleanDest)
+        if (!encFile.exists()) return@AsyncFunction false
+
+        destFile.parentFile?.mkdirs()
+
+        val secretKey = getSecretKey(keyInput)
+        FileInputStream(encFile).use { encIn ->
+          val iv = ByteArray(16)
+          val readIv = encIn.read(iv)
+          if (readIv != 16) return@AsyncFunction false
+
+          val cipher = Cipher.getInstance("AES/CBC/PKCS5Padding")
+          cipher.init(Cipher.DECRYPT_MODE, secretKey, IvParameterSpec(iv))
+
+          CipherInputStream(encIn, cipher).use { cipherIn ->
+            FileOutputStream(destFile).use { fileOut ->
+              val buffer = ByteArray(64 * 1024)
+              var bytesRead: Int
+              while (cipherIn.read(buffer).also { bytesRead = it } != -1) {
+                fileOut.write(buffer, 0, bytesRead)
+              }
+              fileOut.flush()
+            }
+          }
+        }
+        return@AsyncFunction true
+      } catch (e: Exception) {
+        e.printStackTrace()
+        return@AsyncFunction false
+      }
+    }
+
+    AsyncFunction("decryptImageToBase64") { encPath: String, keyInput: String, mimeType: String? ->
+      try {
+        val cleanEnc = encPath.removePrefix("file://")
+        val encFile = File(cleanEnc)
+        if (!encFile.exists()) return@AsyncFunction null
+
+        val secretKey = getSecretKey(keyInput)
+        FileInputStream(encFile).use { encIn ->
+          val iv = ByteArray(16)
+          val readIv = encIn.read(iv)
+          if (readIv != 16) return@AsyncFunction null
+
+          val cipher = Cipher.getInstance("AES/CBC/PKCS5Padding")
+          cipher.init(Cipher.DECRYPT_MODE, secretKey, IvParameterSpec(iv))
+
+          CipherInputStream(encIn, cipher).use { cipherIn ->
+            ByteArrayOutputStream().use { byteOut ->
+              val buffer = ByteArray(64 * 1024)
+              var bytesRead: Int
+              while (cipherIn.read(buffer).also { bytesRead = it } != -1) {
+                byteOut.write(buffer, 0, bytesRead)
+              }
+              val bytes = byteOut.toByteArray()
+              val base64 = Base64.encodeToString(bytes, Base64.NO_WRAP)
+              val mime = mimeType ?: "image/jpeg"
+              return@AsyncFunction "data:$mime;base64,$base64"
+            }
+          }
+        }
+      } catch (e: Exception) {
+        e.printStackTrace()
+        return@AsyncFunction null
+      }
+    }
+
+    AsyncFunction("decryptToCache") { encPath: String, keyInput: String, tempFileName: String ->
+      val context = appContext.reactContext ?: return@AsyncFunction null
+      try {
+        val cleanEnc = encPath.removePrefix("file://")
+        val encFile = File(cleanEnc)
+        if (!encFile.exists()) return@AsyncFunction null
+
+        val secretKey = getSecretKey(keyInput)
+        val safeName = "vault_temp_" + System.currentTimeMillis() + "_" + tempFileName.replace(Regex("[^a-zA-Z0-9._-]"), "_")
+        val outFile = File(context.cacheDir, safeName)
+
+        FileInputStream(encFile).use { encIn ->
+          val iv = ByteArray(16)
+          val readIv = encIn.read(iv)
+          if (readIv != 16) return@AsyncFunction null
+
+          val cipher = Cipher.getInstance("AES/CBC/PKCS5Padding")
+          cipher.init(Cipher.DECRYPT_MODE, secretKey, IvParameterSpec(iv))
+
+          CipherInputStream(encIn, cipher).use { cipherIn ->
+            FileOutputStream(outFile).use { fileOut ->
+              val buffer = ByteArray(64 * 1024)
+              var bytesRead: Int
+              while (cipherIn.read(buffer).also { bytesRead = it } != -1) {
+                fileOut.write(buffer, 0, bytesRead)
+              }
+              fileOut.flush()
+            }
+          }
+        }
+        return@AsyncFunction "file://" + outFile.absolutePath
+      } catch (e: Exception) {
+        e.printStackTrace()
+        return@AsyncFunction null
+      }
+    }
+
+    AsyncFunction("deleteTempFile") { filePath: String ->
+      try {
+        val cleanPath = filePath.removePrefix("file://")
+        val file = File(cleanPath)
+        if (file.exists()) {
+          return@AsyncFunction file.delete()
+        }
+        return@AsyncFunction true
+      } catch (e: Exception) {
+        return@AsyncFunction false
+      }
+    }
+
+    AsyncFunction("clearVolatileCache") {
+      val context = appContext.reactContext ?: return@AsyncFunction false
+      try {
+        val cacheDir = context.cacheDir
+        val tempFiles = cacheDir.listFiles { file -> file.name.startsWith("vault_temp_") }
+        tempFiles?.forEach { it.delete() }
+        return@AsyncFunction true
+      } catch (e: Exception) {
+        return@AsyncFunction false
+      }
+    }
+
+    AsyncFunction("openXiaomiSecurityCenter") {
+      val context = appContext.reactContext ?: return@AsyncFunction false
+      val intents = listOf(
+        Intent().setComponent(ComponentName("com.miui.securitycenter", "com.miui.securityscan.MainActivity")),
+        Intent().setComponent(ComponentName("com.miui.securitycenter", "com.miui.appmanager.AppManagerMainActivity")),
+        Intent(Settings.ACTION_SETTINGS)
+      )
+      for (intent in intents) {
+        try {
+          intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+          context.startActivity(intent)
+          return@AsyncFunction true
+        } catch (e: Exception) {
+          // continue
+        }
+      }
+      return@AsyncFunction false
+    }
+
+    AsyncFunction("openXiaomiHiddenAppsSettings") {
+      val context = appContext.reactContext ?: return@AsyncFunction false
+      val intents = listOf(
+        Intent().setComponent(ComponentName("com.miui.securitycenter", "com.miui.applicationlock.AppLockActivity")),
+        Intent("miui.intent.action.APP_LOCK"),
+        Intent().setComponent(ComponentName("com.miui.securitycenter", "com.miui.permcenter.autostart.AutoStartManagementActivity")),
+        Intent(Settings.ACTION_APPLICATION_SETTINGS)
+      )
+      for (intent in intents) {
+        try {
+          intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+          context.startActivity(intent)
+          return@AsyncFunction true
+        } catch (e: Exception) {
+          // continue
+        }
+      }
+      return@AsyncFunction false
+    }
   }
 
   private fun getPathFromContentUri(cr: ContentResolver, uri: Uri): String? {
@@ -546,5 +808,29 @@ class InstalledAppsModule : Module() {
     scaledBitmap.compress(Bitmap.CompressFormat.PNG, 85, outputStream)
     val byteArray = outputStream.toByteArray()
     return "data:image/png;base64," + Base64.encodeToString(byteArray, Base64.NO_WRAP)
+  }
+
+  private fun hexStringToByteArray(s: String): ByteArray {
+    val len = s.length
+    val data = ByteArray(len / 2)
+    var i = 0
+    while (i < len) {
+      data[i / 2] = ((Character.digit(s[i], 16) shl 4) + Character.digit(s[i + 1], 16)).toByte()
+      i += 2
+    }
+    return data
+  }
+
+  private fun getSecretKey(keyInput: String): SecretKeySpec {
+    val keyBytes = try {
+      if (keyInput.length == 64 && keyInput.all { it in "0123456789abcdefABCDEF" }) {
+        hexStringToByteArray(keyInput)
+      } else {
+        MessageDigest.getInstance("SHA-256").digest(keyInput.toByteArray(Charsets.UTF_8))
+      }
+    } catch (e: Exception) {
+      MessageDigest.getInstance("SHA-256").digest(keyInput.toByteArray(Charsets.UTF_8))
+    }
+    return SecretKeySpec(keyBytes, "AES")
   }
 }

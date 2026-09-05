@@ -26,6 +26,10 @@ import {
   getDeviceOwnerCommandNative,
   getDeviceManufacturerNative,
   isNativeModuleAvailable,
+  isAppInstalledNative,
+  installApkNative,
+  openXiaomiSecurityCenterNative,
+  openXiaomiHiddenAppsSettingsNative,
 } from '../../modules/installed-apps';
 
 export interface AppInfo {
@@ -43,6 +47,7 @@ export interface VaultApp extends AppInfo {
   isPinLocked: boolean;
   isSystemHidden?: boolean;
   apkPath?: string | null;
+  isInstalled?: boolean;
 }
 
 const VAULT_APPS_FILE = `${FileSystem.documentDirectory}vault/apps_hidden.json`;
@@ -102,8 +107,6 @@ export async function reApplySystemHiding(): Promise<void> {
  * Read the list of hidden apps saved in Calculator Vault.
  */
 export async function getHiddenApps(): Promise<VaultApp[]> {
-  if (cachedVaultApps !== null) return cachedVaultApps;
-
   if (Platform.OS === 'web') {
     cachedVaultApps = [];
     return [];
@@ -117,8 +120,21 @@ export async function getHiddenApps(): Promise<VaultApp[]> {
     }
     const content = await FileSystem.readAsStringAsync(VAULT_APPS_FILE);
     const list = JSON.parse(content) as VaultApp[];
-    cachedVaultApps = Array.isArray(list) ? list : [];
-    return cachedVaultApps;
+    const safeList = Array.isArray(list) ? list : [];
+
+    // Dynamically check whether app is currently installed on the phone
+    if (Platform.OS === 'android' && isNativeModuleAvailable) {
+      for (const app of safeList) {
+        try {
+          app.isInstalled = await isAppInstalledNative(app.packageName);
+        } catch {
+          app.isInstalled = false;
+        }
+      }
+    }
+
+    cachedVaultApps = safeList;
+    return safeList;
   } catch {
     cachedVaultApps = [];
     return [];
@@ -274,6 +290,38 @@ export async function backupAppApkAndUninstall(packageName: string, appName: str
   }
 
   return await requestUninstallAppNative(packageName);
+}
+
+/**
+ * Check if a package is currently installed in the Android system
+ */
+export async function checkIsAppInstalled(packageName: string): Promise<boolean> {
+  if (Platform.OS !== 'android') return true;
+  return await isAppInstalledNative(packageName);
+}
+
+/**
+ * Reinstall an APK from the vault using Android FileProvider and Package Installer
+ */
+export async function installVaultApk(apkPath: string): Promise<boolean> {
+  if (Platform.OS !== 'android') return false;
+  return await installApkNative(apkPath);
+}
+
+/**
+ * Open Xiaomi / Redmi / Poco Security Center
+ */
+export async function openXiaomiSecurityCenter(): Promise<boolean> {
+  if (Platform.OS !== 'android') return false;
+  return await openXiaomiSecurityCenterNative();
+}
+
+/**
+ * Open Xiaomi / Redmi / Poco Hidden Apps (App Lock) settings
+ */
+export async function openXiaomiHiddenApps(): Promise<boolean> {
+  if (Platform.OS !== 'android') return false;
+  return await openXiaomiHiddenAppsSettingsNative();
 }
 
 /**

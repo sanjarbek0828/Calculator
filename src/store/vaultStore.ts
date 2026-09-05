@@ -17,6 +17,8 @@ interface VaultState {
   isBiometricEnabled: boolean;
   /** Whether to auto-delete originals after importing to vault */
   autoDeleteOriginal: boolean;
+  /** True strictly when an external system file picker (ImagePicker/DocumentPicker) is open */
+  isExternalPickerActive: boolean;
   /**
    * Counter tracking how many media pickers are currently open.
    * When > 0, AppState changes to "inactive" will NOT close the vault.
@@ -42,6 +44,7 @@ interface VaultState {
   setOnboarded: (value: boolean) => void;
   setBiometricEnabled: (value: boolean) => void;
   setAutoDeleteOriginal: (value: boolean) => void;
+  setExternalPickerActive: (active: boolean) => void;
   /** Legacy setter — kept for compatibility, wraps counter internally */
   setPickingMedia: (value: boolean) => void;
   /** Increment the picking media counter */
@@ -59,15 +62,30 @@ export const useVaultStore = create<VaultState>((set, get) => ({
   isOnboarded: false,
   isBiometricEnabled: false,
   autoDeleteOriginal: true, // Default to always delete from gallery
+  isExternalPickerActive: false,
   pickingMediaCount: 0,
   isPickingMedia: false,
   autoLockSuspendedUntil: 0,
 
   openVault: () => set({ isVaultOpen: true }),
-  closeVault: () => set({ isVaultOpen: false, pickingMediaCount: 0, isPickingMedia: false, autoLockSuspendedUntil: 0 }),
+  closeVault: () =>
+    set({
+      isVaultOpen: false,
+      pickingMediaCount: 0,
+      isPickingMedia: false,
+      isExternalPickerActive: false,
+      autoLockSuspendedUntil: 0,
+    }),
   setOnboarded: (value) => set({ isOnboarded: value }),
   setBiometricEnabled: (value) => set({ isBiometricEnabled: value }),
   setAutoDeleteOriginal: (value) => set({ autoDeleteOriginal: value }),
+  setExternalPickerActive: (active) =>
+    set((state) => ({
+      isExternalPickerActive: active,
+      isPickingMedia: active,
+      pickingMediaCount: active ? Math.max(state.pickingMediaCount, 1) : 0,
+      autoLockSuspendedUntil: active ? Date.now() + 180000 : 0,
+    })),
 
   setPickingMedia: (value) =>
     set((state) => {
@@ -126,8 +144,8 @@ export const useVaultStore = create<VaultState>((set, get) => ({
  */
 export function isAutoLockSuspendedSync(): boolean {
   const state = useVaultStore.getState();
-  if (state.pickingMediaCount > 0 || state.isPickingMedia) return true;
-  if (Date.now() < state.autoLockSuspendedUntil) return true;
+  if (state.isExternalPickerActive) return true;
+  if (state.pickingMediaCount > 0 && Date.now() < state.autoLockSuspendedUntil) return true;
   return false;
 }
 

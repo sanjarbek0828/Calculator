@@ -8,7 +8,7 @@
  * - Haptic feedback
  */
 
-import React, { useCallback } from 'react';
+import React, { useCallback, useState, useEffect } from 'react';
 import {
   View,
   Text,
@@ -17,13 +17,14 @@ import {
   StyleSheet,
   Alert,
   Dimensions,
+  ActivityIndicator,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import * as Haptics from 'expo-haptics';
-import type { VaultFile } from '../services/vaultStorage';
+import { getDecryptedImageUri, type VaultFile } from '../services/vaultStorage';
 
 const SCREEN_WIDTH = Dimensions.get('window').width;
-const NUM_COLUMNS = 3;
+export const NUM_COLUMNS = 3;
 const ITEM_MARGIN = 2;
 const ITEM_SIZE = (SCREEN_WIDTH - ITEM_MARGIN * (NUM_COLUMNS + 1) * 2) / NUM_COLUMNS;
 
@@ -46,6 +47,25 @@ export function VaultGridItem({
   isSelected = false,
   isSelectMode = false,
 }: Props) {
+  const isImage = file.type === 'photos';
+  const isVideo = file.type === 'videos';
+
+  const [displayUri, setDisplayUri] = useState<string | null>(file.isEncrypted ? null : file.uri);
+
+  useEffect(() => {
+    let active = true;
+    if (file.isEncrypted && isImage) {
+      getDecryptedImageUri(file).then((resolved) => {
+        if (active) setDisplayUri(resolved);
+      });
+    } else {
+      setDisplayUri(file.uri);
+    }
+    return () => {
+      active = false;
+    };
+  }, [file, isImage]);
+
   const handleLongPress = useCallback(() => {
     if (onLongPress) {
       onLongPress(file);
@@ -73,9 +93,6 @@ export function VaultGridItem({
     }
   }, [file, onLongPress, onExport, onDelete]);
 
-  const isImage = file.type === 'photos';
-  const isVideo = file.type === 'videos';
-
   return (
     <Pressable
       onPress={() => onPress(file)}
@@ -87,8 +104,25 @@ export function VaultGridItem({
         isSelected && styles.selectedContainer,
       ]}
     >
-      {isImage || isVideo ? (
-        <Image source={{ uri: file.uri }} style={styles.thumbnail} />
+      {isImage ? (
+        displayUri ? (
+          <Image source={{ uri: displayUri }} style={styles.thumbnail} />
+        ) : (
+          <View style={styles.docPlaceholder}>
+            <ActivityIndicator size="small" color="#FF9500" />
+          </View>
+        )
+      ) : isVideo ? (
+        !file.isEncrypted && file.uri ? (
+          <Image source={{ uri: file.uri }} style={styles.thumbnail} />
+        ) : (
+          <View style={[styles.docPlaceholder, { backgroundColor: '#181824' }]}>
+            <Ionicons name="videocam" size={32} color="#FF9500" />
+            <Text style={styles.videoNameText} numberOfLines={1}>
+              {file.originalName}
+            </Text>
+          </View>
+        )
       ) : (
         <View style={styles.docPlaceholder}>
           <Ionicons name="document-text" size={36} color="#8E8E93" />
@@ -172,6 +206,14 @@ const styles = StyleSheet.create({
     color: '#AEAEB2',
     textAlign: 'center',
   },
+  videoNameText: {
+    fontSize: 9,
+    color: '#FFFFFF',
+    marginTop: 4,
+    paddingHorizontal: 4,
+    textAlign: 'center',
+    fontWeight: '500',
+  },
   selectOverlay: {
     position: 'absolute',
     top: 0,
@@ -205,4 +247,4 @@ const styles = StyleSheet.create({
   },
 });
 
-export { ITEM_SIZE, NUM_COLUMNS };
+export { ITEM_SIZE };

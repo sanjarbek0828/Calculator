@@ -39,6 +39,7 @@ import Animated, {
 import {
   Gesture,
   GestureDetector,
+  GestureHandlerRootView,
 } from 'react-native-gesture-handler';
 import {
   listFiles,
@@ -49,6 +50,7 @@ import {
   findMatchingAssetId,
   hasAllFilesAccess,
   requestAllFilesAccess,
+  getDecryptedImageUri,
   type VaultFile,
 } from '../../src/services/vaultStorage';
 import { VaultGridItem, NUM_COLUMNS } from '../../src/components/VaultGridItem';
@@ -105,7 +107,7 @@ function ZoomableImage({ uri, onClose }: ZoomableImageProps) {
     })
     .onUpdate((e) => {
       const next = savedScale.value * e.scale;
-      scale.value = Math.min(MAX_SCALE, Math.max(MIN_SCALE, next));
+      scale.value = Math.min(MAX_SCALE, Math.max(0.75, next));
     })
     .onEnd(() => {
       if (scale.value < MIN_SCALE) {
@@ -115,7 +117,7 @@ function ZoomableImage({ uri, onClose }: ZoomableImageProps) {
         savedX.value  = 0;
         savedY.value  = 0;
       }
-      savedScale.value = scale.value;
+      savedScale.value = Math.max(MIN_SCALE, Math.min(MAX_SCALE, scale.value));
     });
 
   // ── Pan gesture (only when zoomed) ─────────────────────────────
@@ -126,12 +128,12 @@ function ZoomableImage({ uri, onClose }: ZoomableImageProps) {
       savedY.value = offsetY.value;
     })
     .onUpdate((e) => {
-      if (scale.value <= 1) return;
-      offsetX.value = savedX.value + e.translationX;
-      offsetY.value = savedY.value + e.translationY;
+      if (scale.value > 1.05) {
+        offsetX.value = savedX.value + e.translationX;
+        offsetY.value = savedY.value + e.translationY;
+      }
     })
     .onEnd(() => {
-      // Snap back if scale is near 1
       if (scale.value <= 1.05) {
         offsetX.value = withSpring(0, { damping: 20 });
         offsetY.value = withSpring(0, { damping: 20 });
@@ -140,7 +142,7 @@ function ZoomableImage({ uri, onClose }: ZoomableImageProps) {
       }
     });
 
-  // ── Double-tap: toggle 1x ↔ 3x ─────────────────────────────────
+  // ── Double-tap: toggle 1x ↔ 2.5x ───────────────────────────────
   const doubleTap = Gesture.Tap()
     .numberOfTaps(2)
     .maxDuration(250)
@@ -153,27 +155,13 @@ function ZoomableImage({ uri, onClose }: ZoomableImageProps) {
         savedX.value  = 0;
         savedY.value  = 0;
       } else {
-        scale.value  = withSpring(3, { damping: 15 });
-        savedScale.value = 3;
+        scale.value  = withSpring(2.5, { damping: 15 });
+        savedScale.value = 2.5;
       }
     });
 
-  // ── Single tap: close if at 1x ─────────────────────────────────
-  const singleTap = Gesture.Tap()
-    .numberOfTaps(1)
-    .maxDuration(250)
-    .requireExternalGestureToFail(doubleTap)
-    .onEnd(() => {
-      if (scale.value <= 1) {
-        // handled by parent close button
-      }
-    });
-
-  // Compose: pinch + pan run simultaneously; taps are exclusive
-  const composed = Gesture.Race(
-    Gesture.Simultaneous(pinchGesture, panGesture),
-    Gesture.Exclusive(doubleTap, singleTap)
-  );
+  // Compose: pinch + pan + doubleTap simultaneously
+  const composed = Gesture.Simultaneous(pinchGesture, panGesture, doubleTap);
 
   const imageStyle = useAnimatedStyle(() => ({
     transform: [
@@ -205,6 +193,8 @@ export default function PhotosTab() {
   const [importing, setImporting] = useState(false);
   const [importProgress, setImportProgress] = useState({ done: 0, total: 0 });
   const [viewerFile, setViewerFile] = useState<VaultFile | null>(null);
+  const [viewerDecryptedUri, setViewerDecryptedUri] = useState<string | null>(null);
+  const [viewerLoading, setViewerLoading] = useState(false);
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [isSelecting, setIsSelecting] = useState(false);
   const [sortMode, setSortMode] = useState<SortMode>('newest');
@@ -287,7 +277,7 @@ export default function PhotosTab() {
   // ── Fallback: System ImagePicker with intelligent Asset ID resolver ──
   const handleSystemPickerImport = useCallback(async () => {
     try {
-      useVaultStore.getState().suspendAutoLock(180000);
+      useVaultStore.getState().setExternalPickerActive(true);
       incrementPickingMedia();
 
       const result = await ImagePicker.launchImageLibraryAsync({
@@ -346,7 +336,6 @@ export default function PhotosTab() {
       }
 
       if (assetIdsToDelete.length > 0 || urisToDelete.length > 0 || metaToDelete.length > 0) {
-        useVaultStore.getState().suspendAutoLock(120000);
         await deleteOriginalsFromGallery(assetIdsToDelete, urisToDelete, metaToDelete);
       }
 
@@ -355,13 +344,13 @@ export default function PhotosTab() {
     } catch (err) {
       console.warn('System picker import failed:', err);
     } finally {
+      useVaultStore.getState().setExternalPickerActive(false);
       decrementPickingMedia();
       setImporting(false);
     }
   }, [loadFiles, incrementPickingMedia, decrementPickingMedia]);
 
   const handleImport = useCallback(async () => {
-    useVaultStore.getState().suspendAutoLock(120000);
     if (Platform.OS === 'android') {
       const hasAccess = await hasAllFilesAccess();
       if (!hasAccess) {
@@ -411,11 +400,19 @@ export default function PhotosTab() {
     }
   }, [isSelecting, toggleSelect]);
 
-  const handlePress = useCallback((file: VaultFile) => {
+  const handlePress = useCallback(async (file: VaultFile) => {
     if (isSelecting) {
       toggleSelect(file);
     } else {
       setViewerFile(file);
+      if (file.isEncrypted) {
+        setViewerLoading(true);
+        const resolved = await getDecryptedImageUri(file);
+        setViewerDecryptedUri(resolved);
+        setViewerLoading(false);
+      } else {
+        setViewerDecryptedUri(file.uri);
+      }
     }
   }, [isSelecting, toggleSelect]);
 
@@ -657,78 +654,100 @@ export default function PhotosTab() {
           transparent
           animationType="fade"
           statusBarTranslucent
-          onRequestClose={() => setViewerFile(null)}
+          onRequestClose={() => {
+            setViewerFile(null);
+            setViewerDecryptedUri(null);
+          }}
         >
-          <View style={styles.viewer}>
-            {/* Close button */}
-            <View style={styles.viewerTopBar}>
-              <Pressable style={styles.viewerClose} onPress={() => setViewerFile(null)}>
-                <Ionicons name="close" size={24} color="#FFF" />
-              </Pressable>
+          <GestureHandlerRootView style={{ flex: 1 }}>
+            <View style={styles.viewer}>
+              {/* Close button */}
+              <View style={styles.viewerTopBar}>
+                <Pressable
+                  style={styles.viewerClose}
+                  onPress={() => {
+                    setViewerFile(null);
+                    setViewerDecryptedUri(null);
+                  }}
+                >
+                  <Ionicons name="close" size={24} color="#FFF" />
+                </Pressable>
+                {viewerFile && (
+                  <Text style={styles.viewerTopTitle} numberOfLines={1}>
+                    {viewerFile.originalName}
+                  </Text>
+                )}
+                <View style={{ width: 40 }} />
+              </View>
+
+              {/* Zoom hint */}
+              <View style={styles.zoomHint}>
+                <Ionicons name="expand-outline" size={14} color="rgba(255,255,255,0.5)" />
+                <Text style={styles.zoomHintText}>Pinch to zoom · Double-tap to zoom</Text>
+              </View>
+
+              {/* Zoomable image */}
               {viewerFile && (
-                <Text style={styles.viewerTopTitle} numberOfLines={1}>
-                  {viewerFile.originalName}
-                </Text>
-              )}
-              <View style={{ width: 40 }} />
-            </View>
-
-            {/* Zoom hint */}
-            <View style={styles.zoomHint}>
-              <Ionicons name="expand-outline" size={14} color="rgba(255,255,255,0.5)" />
-              <Text style={styles.zoomHintText}>Pinch to zoom · Double-tap to fill</Text>
-            </View>
-
-            {/* Zoomable image */}
-            {viewerFile && (
-              <View style={styles.zoomWrapper}>
-                <ZoomableImage
-                  uri={viewerFile.uri}
-                  onClose={() => setViewerFile(null)}
-                />
-              </View>
-            )}
-
-            {/* Info + actions bar */}
-            {viewerFile && (
-              <View style={styles.viewerInfo}>
-                <Text style={styles.viewerMeta}>
-                  {formatDate(viewerFile.importedAt)} · {formatBytes(viewerFile.sizeBytes)}
-                </Text>
-                <View style={styles.viewerActions}>
-                  <Pressable
-                    style={styles.viewerActionBtn}
-                    onPress={() => {
-                      handleExport(viewerFile);
-                      setViewerFile(null);
-                    }}
-                  >
-                    <Ionicons name="share-outline" size={18} color="#FF9500" />
-                    <Text style={styles.viewerActionText}>Restore to Gallery</Text>
-                  </Pressable>
-                  <Pressable
-                    style={[styles.viewerActionBtn, styles.viewerDeleteBtn]}
-                    onPress={() => {
-                      Alert.alert('Delete Photo', 'Permanently remove from vault?', [
-                        { text: 'Cancel', style: 'cancel' },
-                        {
-                          text: 'Delete',
-                          style: 'destructive',
-                          onPress: () => {
-                            handleDelete(viewerFile);
-                            setViewerFile(null);
-                          },
-                        },
-                      ]);
-                    }}
-                  >
-                    <Ionicons name="trash-outline" size={18} color="#FF453A" />
-                    <Text style={[styles.viewerActionText, { color: '#FF453A' }]}>Delete</Text>
-                  </Pressable>
+                <View style={styles.zoomWrapper}>
+                  {viewerLoading || !viewerDecryptedUri ? (
+                    <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center' }}>
+                      <ActivityIndicator size="large" color="#FF9500" />
+                    </View>
+                  ) : (
+                    <ZoomableImage
+                      uri={viewerDecryptedUri}
+                      onClose={() => {
+                        setViewerFile(null);
+                        setViewerDecryptedUri(null);
+                      }}
+                    />
+                  )}
                 </View>
-              </View>
-            )}
-          </View>
+              )}
+
+              {/* Info + actions bar */}
+              {viewerFile && (
+                <View style={styles.viewerInfo}>
+                  <Text style={styles.viewerMeta}>
+                    {formatDate(viewerFile.importedAt)} · {formatBytes(viewerFile.sizeBytes)}
+                  </Text>
+                  <View style={styles.viewerActions}>
+                    <Pressable
+                      style={styles.viewerActionBtn}
+                      onPress={() => {
+                        handleExport(viewerFile);
+                        setViewerFile(null);
+                        setViewerDecryptedUri(null);
+                      }}
+                    >
+                      <Ionicons name="share-outline" size={18} color="#FF9500" />
+                      <Text style={styles.viewerActionText}>Restore to Gallery</Text>
+                    </Pressable>
+                    <Pressable
+                      style={[styles.viewerActionBtn, styles.viewerDeleteBtn]}
+                      onPress={() => {
+                        Alert.alert('Delete Photo', 'Permanently remove from vault?', [
+                          { text: 'Cancel', style: 'cancel' },
+                          {
+                            text: 'Delete',
+                            style: 'destructive',
+                            onPress: () => {
+                              handleDelete(viewerFile);
+                              setViewerFile(null);
+                              setViewerDecryptedUri(null);
+                            },
+                          },
+                        ]);
+                      }}
+                    >
+                      <Ionicons name="trash-outline" size={18} color="#FF453A" />
+                      <Text style={[styles.viewerActionText, { color: '#FF453A' }]}>Delete</Text>
+                    </Pressable>
+                  </View>
+                </View>
+              )}
+            </View>
+          </GestureHandlerRootView>
         </Modal>
 
         {/* In-app Media Picker modal */}

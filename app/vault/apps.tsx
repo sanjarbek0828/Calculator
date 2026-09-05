@@ -46,6 +46,9 @@ import {
   backupAppApkAndUninstall,
   getDeviceOwnerCommand,
   getDeviceManufacturer,
+  installVaultApk,
+  openXiaomiSecurityCenter,
+  openXiaomiHiddenApps,
   type AppInfo,
   type VaultApp,
 } from '../../src/services/vaultAppsService';
@@ -176,25 +179,74 @@ export default function AppsTab() {
     }
   }, [selectedPackages, installedApps, loadData]);
 
+  // ── Install APK from Vault (Reinstall or direct install) ───────
+  const handleInstallVaultApk = useCallback(
+    async (apkPath: string, appName?: string) => {
+      Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Heavy);
+      useVaultStore.getState().suspendAutoLock(120000);
+      const ok = await installVaultApk(apkPath);
+      if (!ok) {
+        Alert.alert(
+          'O\'rnatish xatoligi',
+          'APK faylini o\'rnatuvchi oynasini ochib bo\'lmadi. Sozlamalardan Calculator ilovasi uchun "Noma\'lum ilovalarni o\'rnatish" ruxsatini yoqing.'
+        );
+      } else {
+        // Refresh installed status shortly after user returns from package installer
+        setTimeout(() => {
+          loadData();
+        }, 4000);
+      }
+    },
+    [loadData]
+  );
+
   // ── Launch an app ──────────────────────────────────────────────
-  const handleLaunchApp = useCallback(async (app: VaultApp) => {
-    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
-    useVaultStore.getState().suspendAutoLock(60000);
-    const ok = await launchApp(app.packageName);
-    if (!ok) {
-      Alert.alert(
-        app.appName,
-        `Ilovani to'g'ridan-to'g'ri ochib bo'lmadi.\nPaket: ${app.packageName}`,
-        [
-          { text: 'Bekor', style: 'cancel' },
-          {
-            text: 'Ilova sozlamalarini ochish',
-            onPress: () => openAppInfo(app.packageName),
-          },
-        ]
-      );
-    }
-  }, []);
+  const handleLaunchApp = useCallback(
+    async (app: VaultApp) => {
+      Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+
+      // If app is uninstalled from phone
+      if (app.isInstalled === false) {
+        if (app.apkPath) {
+          Alert.alert(
+            `${app.appName} o'chirilgan`,
+            `"${app.appName}" telefondan o'chirilgan, lekin uning APK fayli Calculator ichida xavfsiz zaxiralangan.\n\nIlovani qayta o'rnatishni xohlaysizmi?`,
+            [
+              { text: 'Bekor', style: 'cancel' },
+              {
+                text: "🚀 Qayta o'rnatish",
+                onPress: () => handleInstallVaultApk(app.apkPath!, app.appName),
+              },
+            ]
+          );
+        } else {
+          Alert.alert(
+            app.appName,
+            "Bu ilova telefonda o'rnatilmagan yoki o'chirib tashlangan.",
+            [{ text: 'Tushundim' }]
+          );
+        }
+        return;
+      }
+
+      useVaultStore.getState().suspendAutoLock(60000);
+      const ok = await launchApp(app.packageName);
+      if (!ok) {
+        Alert.alert(
+          app.appName,
+          `Ilovani to'g'ridan-to'g'ri ochib bo'lmadi.\nPaket: ${app.packageName}`,
+          [
+            { text: 'Bekor', style: 'cancel' },
+            {
+              text: 'Ilova sozlamalarini ochish',
+              onPress: () => openAppInfo(app.packageName),
+            },
+          ]
+        );
+      }
+    },
+    [handleInstallVaultApk]
+  );
 
   // ── Toggle System Hide (Remove from Launcher & Search) ─────────
   const handleToggleSystemHide = useCallback(
@@ -281,37 +333,62 @@ export default function AppsTab() {
   const handleAppOptions = useCallback(
     (app: VaultApp) => {
       Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
-      Alert.alert(app.appName, `Paket: ${app.packageName}`, [
-        { text: '▶ Ishga tushirish (Ochish)', onPress: () => handleLaunchApp(app) },
-        {
-          text: app.isSystemHidden ? '👁️ Qayta ko\'rsatish' : '🛡️ Qidiruv va Menyudan yashirish',
-          onPress: () => handleToggleSystemHide(app),
-        },
-        {
+      const options: { text: string; onPress?: () => void; style?: 'default' | 'cancel' | 'destructive' }[] = [];
+
+      if (app.isInstalled === false && app.apkPath) {
+        options.push({
+          text: "🚀 Qayta o'rnatish (Install APK)",
+          onPress: () => handleInstallVaultApk(app.apkPath!, app.appName),
+        });
+      } else {
+        options.push({
+          text: '▶ Ishga tushirish (Ochish)',
+          onPress: () => handleLaunchApp(app),
+        });
+      }
+
+      options.push({
+        text: app.isSystemHidden ? '👁️ Qayta ko\'rsatish' : '🛡️ Qidiruv va Menyudan yashirish',
+        onPress: () => handleToggleSystemHide(app),
+      });
+
+      if (app.isInstalled !== false) {
+        options.push({
           text: '📦 APK zaxiralab, telefondan o\'chirish',
           onPress: () => handleBackupAndUninstall(app),
+        });
+      } else if (app.apkPath) {
+        options.push({
+          text: '📦 Zaxiralangan APK ni o\'rnatish',
+          onPress: () => handleInstallVaultApk(app.apkPath!, app.appName),
+        });
+      }
+
+      options.push({
+        text: '⚙️ Ilova tizim sozlamalari (App Info)',
+        onPress: () => {
+          useVaultStore.getState().suspendAutoLock(60000);
+          openAppInfo(app.packageName);
         },
-        {
-          text: '⚙️ Ilova tizim sozlamalari (App Info)',
-          onPress: () => {
-            useVaultStore.getState().suspendAutoLock(60000);
-            openAppInfo(app.packageName);
-          },
-        },
-        {
-          text: '🗑️ Kalkulyatordan chiqarish',
-          style: 'destructive',
-          onPress: () => handleRemoveApp(app),
-        },
-        { text: 'Bekor', style: 'cancel' },
-      ]);
+      });
+
+      options.push({
+        text: '🗑️ Kalkulyatordan chiqarish',
+        style: 'destructive',
+        onPress: () => handleRemoveApp(app),
+      });
+
+      options.push({ text: 'Bekor', style: 'cancel' });
+
+      Alert.alert(app.appName, `Paket: ${app.packageName}`, options);
     },
-    [handleLaunchApp, handleToggleSystemHide, handleBackupAndUninstall, handleRemoveApp]
+    [handleLaunchApp, handleInstallVaultApk, handleToggleSystemHide, handleBackupAndUninstall, handleRemoveApp]
   );
 
   // ── Import APK / App Document ──────────────────────────────────
   const handleImportApk = useCallback(async () => {
     try {
+      useVaultStore.getState().setExternalPickerActive(true);
       useVaultStore.getState().suspendAutoLock(120000);
       useVaultStore.getState().incrementPickingMedia();
 
@@ -339,6 +416,7 @@ export default function AppsTab() {
       Alert.alert('Xatolik', 'Faylni import qilib bo\'lmadi.');
     } finally {
       useVaultStore.getState().decrementPickingMedia();
+      useVaultStore.getState().setExternalPickerActive(false);
       setLoading(false);
     }
   }, [loadData]);
@@ -557,7 +635,12 @@ export default function AppsTab() {
                     {item.packageName}
                   </Text>
                   <View style={styles.badgeRow}>
-                    {item.isSystemHidden ? (
+                    {item.isInstalled === false ? (
+                      <View style={styles.uninstalledBadge}>
+                        <Ionicons name="alert-circle" size={10} color="#FF9F0A" />
+                        <Text style={styles.uninstalledBadgeText}>Telefonda o'chirilgan</Text>
+                      </View>
+                    ) : item.isSystemHidden ? (
                       <View style={styles.systemHiddenBadge}>
                         <Ionicons name="shield-checkmark" size={10} color="#30D158" />
                         <Text style={styles.systemHiddenBadgeText}>Qidiruvda chiqmaydi</Text>
@@ -578,13 +661,23 @@ export default function AppsTab() {
 
                 {/* Launch & Options Buttons */}
                 <View style={styles.appRightActions}>
-                  <Pressable
-                    style={styles.launchBtn}
-                    onPress={() => handleLaunchApp(item)}
-                  >
-                    <Ionicons name="play" size={14} color="#FFF" />
-                    <Text style={styles.launchBtnText}>Ochish</Text>
-                  </Pressable>
+                  {item.isInstalled === false && item.apkPath ? (
+                    <Pressable
+                      style={styles.reinstallBtn}
+                      onPress={() => handleInstallVaultApk(item.apkPath!, item.appName)}
+                    >
+                      <Ionicons name="download" size={14} color="#000" />
+                      <Text style={styles.reinstallBtnText}>O'rnatish</Text>
+                    </Pressable>
+                  ) : (
+                    <Pressable
+                      style={styles.launchBtn}
+                      onPress={() => handleLaunchApp(item)}
+                    >
+                      <Ionicons name="play" size={14} color="#FFF" />
+                      <Text style={styles.launchBtnText}>Ochish</Text>
+                    </Pressable>
+                  )}
 
                   <Pressable
                     style={styles.moreBtn}
@@ -615,23 +708,33 @@ export default function AppsTab() {
                   {(item.sizeBytes / (1024 * 1024)).toFixed(1)} MB
                 </Text>
               </View>
-              <Pressable
-                onPress={() => {
-                  Alert.alert('O\'chirish', 'APK xotiradan o\'chirilsinmi?', [
-                    { text: 'Bekor', style: 'cancel' },
-                    {
-                      text: 'O\'chirish',
-                      style: 'destructive',
-                      onPress: async () => {
-                        await deleteFile('apps', item.id);
-                        loadData();
+              <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+                <Pressable
+                  style={styles.installApkBtn}
+                  onPress={() => handleInstallVaultApk(item.uri, item.originalName)}
+                >
+                  <Ionicons name="download" size={14} color="#000" />
+                  <Text style={styles.installApkBtnText}>O'rnatish</Text>
+                </Pressable>
+                <Pressable
+                  onPress={() => {
+                    Alert.alert('O\'chirish', 'APK xotiradan o\'chirilsinmi?', [
+                      { text: 'Bekor', style: 'cancel' },
+                      {
+                        text: 'O\'chirish',
+                        style: 'destructive',
+                        onPress: async () => {
+                          await deleteFile('apps', item.id);
+                          loadData();
+                        },
                       },
-                    },
-                  ]);
-                }}
-              >
-                <Ionicons name="trash-outline" size={20} color="#FF453A" />
-              </Pressable>
+                    ]);
+                  }}
+                  style={{ padding: 6 }}
+                >
+                  <Ionicons name="trash-outline" size={20} color="#FF453A" />
+                </Pressable>
+              </View>
             </View>
           )}
           ListEmptyComponent={() => (
@@ -883,6 +986,33 @@ export default function AppsTab() {
             </View>
 
             <ScrollView style={styles.guideBody}>
+              {/* Method 0: If app is uninstalled but has backup APK: 1-Tap Reinstall */}
+              {selectedTargetApp && selectedTargetApp.isInstalled === false && selectedTargetApp.apkPath && (
+                <View style={[styles.guideCard, { borderColor: '#3ddc84', borderWidth: 1.5 }]}>
+                  <View style={styles.guideCardHeader}>
+                    <View style={[styles.methodBadge, { backgroundColor: '#3ddc84' }]}>
+                      <Text style={[styles.methodBadgeText, { color: '#000' }]}>ZAXIRADAN TIKLASH</Text>
+                    </View>
+                    <Text style={styles.guideCardTitle}>Ilovani Qayta O'rnatish</Text>
+                  </View>
+                  <Text style={styles.guideCardDesc}>
+                    {"Bu ilova telefondan o'chirilgan, lekin uning to'liq APK fayli Calculator ichida xavfsiz saqlangan. 1 bosishda qayta o'rnatishingiz mumkin."}
+                  </Text>
+                  <Pressable
+                    style={[styles.backupBtn, { backgroundColor: '#3ddc84' }]}
+                    onPress={() => {
+                      setShowAssistantModal(false);
+                      handleInstallVaultApk(selectedTargetApp.apkPath!, selectedTargetApp.appName);
+                    }}
+                  >
+                    <Ionicons name="download-outline" size={18} color="#000" />
+                    <Text style={[styles.backupBtnText, { color: '#000' }]}>
+                      {"🚀 Qayta o'rnatish (Install APK)"}
+                    </Text>
+                  </Pressable>
+                </View>
+              )}
+
               {/* Method 1: OEM Hide Settings */}
               <View style={styles.guideCard}>
                 <View style={styles.guideCardHeader}>
@@ -909,6 +1039,45 @@ export default function AppsTab() {
                     {deviceManufacturer} Yashirish Sozlamasini Ochish
                   </Text>
                 </Pressable>
+              </View>
+
+              {/* Xiaomi / Redmi / Poco Special Controls */}
+              <View style={styles.guideCard}>
+                <View style={styles.guideCardHeader}>
+                  <View style={[styles.methodBadge, { backgroundColor: '#FF6900' }]}>
+                    <Text style={[styles.methodBadgeText, { color: '#FFF' }]}>XIAOMI / REDMI / POCO</Text>
+                  </View>
+                  <Text style={styles.guideCardTitle}>MIUI & HyperOS Sozlamalari</Text>
+                </View>
+                <Text style={styles.guideCardDesc}>
+                  {"Redmi, Poco va Xiaomi telefonlarida maxfiy ilovalar bo'limi tizimning o'zida mavjud:"}
+                </Text>
+                <View style={{ gap: 8, marginTop: 4 }}>
+                  <Pressable
+                    style={styles.xiaomiBtn}
+                    onPress={async () => {
+                      useVaultStore.getState().suspendAutoLock(60000);
+                      await openXiaomiHiddenApps();
+                    }}
+                  >
+                    <Ionicons name="eye-off-outline" size={18} color="#FFF" />
+                    <Text style={styles.xiaomiBtnText}>
+                      Maxfiy Ilovalar Sozlamasini Ochish
+                    </Text>
+                  </Pressable>
+                  <Pressable
+                    style={[styles.xiaomiBtn, { backgroundColor: '#2C2C3E' }]}
+                    onPress={async () => {
+                      useVaultStore.getState().suspendAutoLock(60000);
+                      await openXiaomiSecurityCenter();
+                    }}
+                  >
+                    <Ionicons name="shield-checkmark-outline" size={18} color="#FFF" />
+                    <Text style={styles.xiaomiBtnText}>
+                      Xavfsizlik Markazi (Security)
+                    </Text>
+                  </Pressable>
+                </View>
               </View>
 
               {/* Method 2: Backup APK & Uninstall */}
@@ -1586,5 +1755,62 @@ const styles = StyleSheet.create({
     color: '#FFFFFF',
     fontWeight: '600',
     fontSize: 15,
+  },
+  reinstallBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    backgroundColor: '#3ddc84',
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    borderRadius: 8,
+  },
+  reinstallBtnText: {
+    color: '#000',
+    fontSize: 13,
+    fontWeight: '700',
+  },
+  uninstalledBadge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    backgroundColor: 'rgba(255,159,10,0.15)',
+    paddingHorizontal: 6,
+    paddingVertical: 2,
+    borderRadius: 4,
+  },
+  uninstalledBadgeText: {
+    fontSize: 10,
+    color: '#FF9F0A',
+    fontWeight: '700',
+  },
+  installApkBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    backgroundColor: '#3ddc84',
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    borderRadius: 8,
+  },
+  installApkBtnText: {
+    color: '#000',
+    fontSize: 12,
+    fontWeight: '700',
+  },
+  xiaomiBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 6,
+    backgroundColor: '#FF6900',
+    paddingVertical: 10,
+    borderRadius: 10,
+    marginTop: 4,
+  },
+  xiaomiBtnText: {
+    color: '#FFF',
+    fontWeight: '700',
+    fontSize: 13,
   },
 });

@@ -40,6 +40,7 @@ import {
   findMatchingAssetId,
   hasAllFilesAccess,
   requestAllFilesAccess,
+  getDecryptedVideoPlaybackUri,
   type VaultFile,
 } from '../../src/services/vaultStorage';
 import { VaultGridItem, NUM_COLUMNS } from '../../src/components/VaultGridItem';
@@ -77,6 +78,9 @@ export default function VideosTab() {
   const [importing, setImporting] = useState(false);
   const [importProgress, setImportProgress] = useState({ done: 0, total: 0 });
   const [viewerFile, setViewerFile] = useState<VaultFile | null>(null);
+  const [playbackUri, setPlaybackUri] = useState<string | null>(null);
+  const [playbackCleanup, setPlaybackCleanup] = useState<(() => Promise<void>) | null>(null);
+  const [playbackLoading, setPlaybackLoading] = useState(false);
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [isSelecting, setIsSelecting] = useState(false);
   const [sortMode, setSortMode] = useState<SortMode>('newest');
@@ -159,7 +163,7 @@ export default function VideosTab() {
   // ── Fallback: System ImagePicker with intelligent Asset ID resolver ──
   const handleSystemPickerImport = useCallback(async () => {
     try {
-      useVaultStore.getState().suspendAutoLock(180000);
+      useVaultStore.getState().setExternalPickerActive(true);
       incrementPickingMedia();
 
       const result = await ImagePicker.launchImageLibraryAsync({
@@ -218,7 +222,6 @@ export default function VideosTab() {
       }
 
       if (assetIdsToDelete.length > 0 || urisToDelete.length > 0 || metaToDelete.length > 0) {
-        useVaultStore.getState().suspendAutoLock(120000);
         await deleteOriginalsFromGallery(assetIdsToDelete, urisToDelete, metaToDelete);
       }
 
@@ -227,13 +230,13 @@ export default function VideosTab() {
     } catch (err) {
       console.warn('System video picker failed:', err);
     } finally {
+      useVaultStore.getState().setExternalPickerActive(false);
       decrementPickingMedia();
       setImporting(false);
     }
   }, [loadFiles, incrementPickingMedia, decrementPickingMedia]);
 
   const handleImport = useCallback(async () => {
-    useVaultStore.getState().suspendAutoLock(120000);
     if (Platform.OS === 'android') {
       const hasAccess = await hasAllFilesAccess();
       if (!hasAccess) {
@@ -282,11 +285,29 @@ export default function VideosTab() {
     }
   }, [isSelecting, toggleSelect]);
 
-  const handlePress = useCallback((file: VaultFile) => {
+  const handleCloseViewer = useCallback(async () => {
+    if (playbackCleanup) {
+      try {
+        await playbackCleanup();
+      } catch {
+        // ignore
+      }
+    }
+    setPlaybackCleanup(null);
+    setPlaybackUri(null);
+    setViewerFile(null);
+  }, [playbackCleanup]);
+
+  const handlePress = useCallback(async (file: VaultFile) => {
     if (isSelecting) {
       toggleSelect(file);
     } else {
       setViewerFile(file);
+      setPlaybackLoading(true);
+      const res = await getDecryptedVideoPlaybackUri(file);
+      setPlaybackUri(res.uri);
+      setPlaybackCleanup(() => res.cleanup);
+      setPlaybackLoading(false);
     }
   }, [isSelecting, toggleSelect]);
 
@@ -527,11 +548,11 @@ export default function VideosTab() {
         transparent
         animationType="fade"
         statusBarTranslucent
-        onRequestClose={() => setViewerFile(null)}
+        onRequestClose={handleCloseViewer}
       >
         <View style={styles.viewer}>
           <View style={styles.viewerTopBar}>
-            <Pressable style={styles.viewerClose} onPress={() => setViewerFile(null)}>
+            <Pressable style={styles.viewerClose} onPress={handleCloseViewer}>
               <Ionicons name="close" size={24} color="#FFF" />
             </Pressable>
             {viewerFile && (
@@ -544,7 +565,14 @@ export default function VideosTab() {
 
           {viewerFile && (
             <>
-              <VideoPlayerView uri={viewerFile.uri} />
+              {playbackLoading || !playbackUri ? (
+                <View style={[styles.videoPlayer, { justifyContent: 'center', alignItems: 'center', backgroundColor: '#111' }]}>
+                  <ActivityIndicator size="large" color="#FF9500" />
+                  <Text style={{ color: '#8E8E93', marginTop: 10, fontSize: 13 }}>Yuklanmoqda...</Text>
+                </View>
+              ) : (
+                <VideoPlayerView uri={playbackUri} />
+              )}
               <View style={styles.viewerInfo}>
                 <Text style={styles.viewerMeta}>
                   {formatDate(viewerFile.importedAt)} · {formatBytes(viewerFile.sizeBytes)}
@@ -552,9 +580,9 @@ export default function VideosTab() {
                 <View style={styles.viewerActions}>
                   <Pressable
                     style={styles.viewerActionBtn}
-                    onPress={() => {
-                      handleExport(viewerFile);
-                      setViewerFile(null);
+                    onPress={async () => {
+                      await handleExport(viewerFile);
+                      await handleCloseViewer();
                     }}
                   >
                     <Ionicons name="share-outline" size={18} color="#FF9500" />
@@ -568,9 +596,9 @@ export default function VideosTab() {
                         {
                           text: 'Delete',
                           style: 'destructive',
-                          onPress: () => {
-                            handleDelete(viewerFile);
-                            setViewerFile(null);
+                          onPress: async () => {
+                            await handleDelete(viewerFile);
+                            await handleCloseViewer();
                           },
                         },
                       ]);
@@ -614,7 +642,7 @@ function VideoPlayerView({ uri }: { uri: string }) {
     />
   );
 }
-
+         
 const styles = StyleSheet.create({
   container:            { flex: 1, backgroundColor: '#000000' },
   header:               { paddingHorizontal: 16, paddingTop: 12, paddingBottom: 10 },
