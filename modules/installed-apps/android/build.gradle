@@ -15,12 +15,12 @@ if (expoModulesCorePlugin.exists()) {
 }
 
 android {
-  compileSdk getExtOrDefault('compileSdkVersion', 36)
+  compileSdk getExtOrDefault('compileSdkVersion', 35)
 
   namespace "expo.modules.installedapps"
   defaultConfig {
     minSdk getExtOrDefault('minSdkVersion', 24)
-    targetSdk getExtOrDefault('targetSdkVersion', 36)
+    targetSdk getExtOrDefault('targetSdkVersion', 34)
     versionCode 1
     versionName "1.0.0"
   }
