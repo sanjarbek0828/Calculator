@@ -20,11 +20,13 @@ import {
   SafeAreaView,
   StatusBar,
   Alert,
+  AppState,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import * as MediaLibrary from 'expo-media-library';
 import * as Haptics from 'expo-haptics';
 import { useVaultStore } from '../store/vaultStore';
+import { openAppSettingsNative } from '../../modules/installed-apps';
 
 const { width: SCREEN_WIDTH } = Dimensions.get('window');
 const NUM_COLUMNS = 3;
@@ -103,6 +105,17 @@ export function MediaPickerModal({
       loadMedia();
     }
   }, [visible, loadMedia]);
+
+  // Re-check permissions when returning from Android Settings while modal is open
+  useEffect(() => {
+    if (!visible) return;
+    const sub = AppState.addEventListener('change', (next) => {
+      if (next === 'active' && hasPermission === false) {
+        loadMedia();
+      }
+    });
+    return () => sub.remove();
+  }, [visible, hasPermission, loadMedia]);
 
   const toggleSelect = useCallback((id: string) => {
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
@@ -202,9 +215,20 @@ export function MediaPickerModal({
             <Text style={styles.permissionSub}>
               {"Fayllarni ko'rish va galereyadan o'chirish uchun ilovaga ruxsat zarur."}
             </Text>
-            <Pressable style={styles.permButton} onPress={loadMedia}>
-              <Text style={styles.permButtonText}>Qayta urinish</Text>
-            </Pressable>
+            <View style={{ flexDirection: 'row', gap: 10, marginTop: 4 }}>
+              <Pressable style={styles.permButton} onPress={loadMedia}>
+                <Text style={styles.permButtonText}>Qayta urinish</Text>
+              </Pressable>
+              <Pressable
+                style={[styles.permButton, { backgroundColor: '#3A3A3C' }]}
+                onPress={() => {
+                  useVaultStore.getState().startMediaPick();
+                  openAppSettingsNative();
+                }}
+              >
+                <Text style={styles.permButtonText}>Sozlamalarni ochish</Text>
+              </Pressable>
+            </View>
           </View>
         ) : assets.length === 0 ? (
           <View style={styles.center}>

@@ -20,6 +20,7 @@ import {
   ScrollView,
   TextInput,
   Modal,
+  AppState,
 } from 'react-native';
 import { useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
@@ -28,7 +29,17 @@ import * as LocalAuthentication from 'expo-local-authentication';
 import { changePin } from '../../src/services/pinService';
 import * as Store from '../../src/services/secureStore';
 import { useVaultStore } from '../../src/store/vaultStore';
-import { getFileCounts, type VaultFileType } from '../../src/services/vaultStorage';
+import {
+  getFileCounts,
+  type VaultFileType,
+  hasMediaPermissions,
+  requestMediaPermissions,
+  hasAllFilesAccess,
+  requestAllFilesAccess,
+  canInstallUnknownApps,
+  requestInstallUnknownApps,
+  openAppSystemSettings,
+} from '../../src/services/vaultStorage';
 import { getHiddenApps } from '../../src/services/vaultAppsService';
 
 export default function SettingsTab() {
@@ -47,10 +58,33 @@ export default function SettingsTab() {
   const [fileCounts, setFileCounts] = useState<Record<VaultFileType, number>>({ photos: 0, videos: 0, documents: 0, apps: 0 });
   const [hiddenAppsCount, setHiddenAppsCount] = useState(0);
 
+  const [mediaGranted, setMediaGranted] = useState(false);
+  const [allFilesGranted, setAllFilesGranted] = useState(false);
+  const [installApkGranted, setInstallApkGranted] = useState(false);
+
+  const checkPermissions = useCallback(async () => {
+    const mg = await hasMediaPermissions();
+    const fg = await hasAllFilesAccess();
+    const ig = await canInstallUnknownApps();
+    setMediaGranted(mg);
+    setAllFilesGranted(fg);
+    setInstallApkGranted(ig);
+  }, []);
+
   useEffect(() => {
     getFileCounts().then(setFileCounts);
     getHiddenApps().then((apps) => setHiddenAppsCount(apps.length));
-  }, []);
+    checkPermissions();
+  }, [checkPermissions]);
+
+  useEffect(() => {
+    const sub = AppState.addEventListener('change', (next) => {
+      if (next === 'active') {
+        checkPermissions();
+      }
+    });
+    return () => sub.remove();
+  }, [checkPermissions]);
 
   // ── Toggle biometric ──────────────────────────────────────────
   const handleBiometricToggle = useCallback(
@@ -145,6 +179,44 @@ export default function SettingsTab() {
     }
   }, [pinStep, oldPin, newPin, confirmPin]);
 
+  // ── Permissions management handlers ─────────────────────────
+  const handleRequestMedia = useCallback(async () => {
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+    const ok = await requestMediaPermissions();
+    setMediaGranted(ok);
+    if (!ok) {
+      Alert.alert(
+        'Galereyaga ruxsat',
+        'Galereyaga ruxsat berish uchun telefon sozlamalariga o\'tasizmi?',
+        [
+          { text: 'Bekor', style: 'cancel' },
+          { text: 'Sozlamalarni ochish', onPress: () => openAppSystemSettings() },
+        ]
+      );
+    }
+  }, []);
+
+  const handleRequestAllFiles = useCallback(async () => {
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+    await requestAllFilesAccess();
+    setTimeout(() => {
+      checkPermissions();
+    }, 1500);
+  }, [checkPermissions]);
+
+  const handleRequestInstallApk = useCallback(async () => {
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+    await requestInstallUnknownApps();
+    setTimeout(() => {
+      checkPermissions();
+    }, 1500);
+  }, [checkPermissions]);
+
+  const handleOpenAppSettings = useCallback(async () => {
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+    await openAppSystemSettings();
+  }, []);
+
   // ── Exit to calculator ────────────────────────────────────────
   const handleExit = useCallback(() => {
     closeVault();
@@ -227,6 +299,91 @@ export default function SettingsTab() {
               thumbColor="#FFFFFF"
             />
           </View>
+        </View>
+
+        {/* Permissions & System section */}
+        <Text style={styles.sectionTitle}>TIZIM RUXSATLARI</Text>
+        <View style={styles.section}>
+          {/* Gallery Permission */}
+          <View style={styles.settingRow}>
+            <Ionicons name="images" size={22} color="#FF9500" style={styles.settingIcon} />
+            <View style={styles.settingLabelGroup}>
+              <Text style={styles.settingLabel}>Galereya ruxsati</Text>
+              <Text style={styles.settingDescription}>
+                {mediaGranted ? "Rasmlar va videolarga ruxsat berilgan" : "Ruxsat berilmagan"}
+              </Text>
+            </View>
+            {mediaGranted ? (
+              <View style={styles.badgeGranted}>
+                <Ionicons name="checkmark-circle" size={16} color="#34C759" />
+                <Text style={styles.badgeTextGranted}>Berilgan</Text>
+              </View>
+            ) : (
+              <Pressable style={styles.actionBtn} onPress={handleRequestMedia}>
+                <Text style={styles.actionBtnText}>Ruxsat berish</Text>
+              </Pressable>
+            )}
+          </View>
+
+          <View style={styles.divider} />
+
+          {/* All Files Access Permission */}
+          <View style={styles.settingRow}>
+            <Ionicons name="folder-open" size={22} color="#FF9500" style={styles.settingIcon} />
+            <View style={styles.settingLabelGroup}>
+              <Text style={styles.settingLabel}>Barcha fayllarga ruxsat</Text>
+              <Text style={styles.settingDescription}>
+                {allFilesGranted ? "Fayllarni to'liq o'chirish faol" : "Android 14 da asl nusxalarni o'chirish"}
+              </Text>
+            </View>
+            {allFilesGranted ? (
+              <View style={styles.badgeGranted}>
+                <Ionicons name="checkmark-circle" size={16} color="#34C759" />
+                <Text style={styles.badgeTextGranted}>Berilgan</Text>
+              </View>
+            ) : (
+              <Pressable style={styles.actionBtn} onPress={handleRequestAllFiles}>
+                <Text style={styles.actionBtnText}>Yoqish</Text>
+              </Pressable>
+            )}
+          </View>
+
+          <View style={styles.divider} />
+
+          {/* Unknown Apps Install Permission */}
+          <View style={styles.settingRow}>
+            <Ionicons name="cube" size={22} color="#FF9500" style={styles.settingIcon} />
+            <View style={styles.settingLabelGroup}>
+              <Text style={styles.settingLabel}>{"APK o'rnatish ruxsati"}</Text>
+              <Text style={styles.settingDescription}>
+                {installApkGranted ? "APK larni qayta o'rnatish faol" : "Zaxiralangan ilovalarni o'rnatish"}
+              </Text>
+            </View>
+            {installApkGranted ? (
+              <View style={styles.badgeGranted}>
+                <Ionicons name="checkmark-circle" size={16} color="#34C759" />
+                <Text style={styles.badgeTextGranted}>Berilgan</Text>
+              </View>
+            ) : (
+              <Pressable style={styles.actionBtn} onPress={handleRequestInstallApk}>
+                <Text style={styles.actionBtnText}>Yoqish</Text>
+              </Pressable>
+            )}
+          </View>
+
+          <View style={styles.divider} />
+
+          {/* App Info / System Settings */}
+          <Pressable style={styles.settingRow} onPress={handleOpenAppSettings}>
+            <Ionicons name="settings" size={22} color="#FF9500" style={styles.settingIcon} />
+            <View style={styles.settingLabelGroup}>
+              <Text style={styles.settingLabel}>Ilova tizim sozlamalari</Text>
+              <Text style={styles.settingDescription}>
+                Android sozlamalaridan ruxsatlarni boshqarish
+              </Text>
+            </View>
+            <Ionicons name="chevron-forward" size={18} color="#48484A" />
+          </Pressable>
         </View>
 
         {/* Exit */}
@@ -425,5 +582,32 @@ const styles = StyleSheet.create({
   modalButtonText: {
     fontSize: 16,
     fontWeight: '600',
+  },
+  badgeGranted: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    backgroundColor: 'rgba(52, 199, 89, 0.12)',
+    borderRadius: 8,
+  },
+  badgeTextGranted: {
+    fontSize: 12,
+    fontWeight: '600',
+    color: '#34C759',
+  },
+  actionBtn: {
+    backgroundColor: 'rgba(255, 149, 0, 0.15)',
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: '#FF9500',
+  },
+  actionBtnText: {
+    fontSize: 12,
+    fontWeight: '600',
+    color: '#FF9500',
   },
 });

@@ -33,6 +33,27 @@ export async function hasManageExternalStoragePermissionNative(): Promise<boolea
   return await InstalledAppsNative.hasManageExternalStoragePermission();
 }
 
+export async function checkMediaPermissionsNative(): Promise<boolean> {
+  if (!InstalledAppsNative?.checkMediaPermissions) {
+    return false;
+  }
+  return await InstalledAppsNative.checkMediaPermissions();
+}
+
+export async function canInstallApkNative(): Promise<boolean> {
+  if (!InstalledAppsNative?.canInstallApk) {
+    return true;
+  }
+  return await InstalledAppsNative.canInstallApk();
+}
+
+export async function openInstallPermissionSettingsNative(): Promise<boolean> {
+  if (!InstalledAppsNative?.openInstallPermissionSettings) {
+    return false;
+  }
+  return await InstalledAppsNative.openInstallPermissionSettings();
+}
+
 export async function requestManageExternalStoragePermissionNative(): Promise<boolean> {
   if (!InstalledAppsNative?.requestManageExternalStoragePermission) {
     return false;
@@ -65,7 +86,7 @@ export async function launchAppNative(packageName: string): Promise<boolean> {
   return await InstalledAppsNative.launchApp(packageName);
 }
 
-export async function openAppSettingsNative(packageName: string): Promise<boolean> {
+export async function openAppSettingsNative(packageName: string = ''): Promise<boolean> {
   if (!InstalledAppsNative?.openAppSettings) {
     return false;
   }

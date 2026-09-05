@@ -32,6 +32,10 @@ import {
   decryptToCacheNative,
   deleteTempFileNative,
   clearVolatileCacheNative,
+  checkMediaPermissionsNative,
+  canInstallApkNative,
+  openInstallPermissionSettingsNative,
+  openAppSettingsNative,
   type MediaDeleteItem,
 } from '../../modules/installed-apps';
 
@@ -386,7 +390,88 @@ export async function requestAllFilesAccess(): Promise<boolean> {
 }
 
 /**
- * Request all required initial permissions for Media and Storage
+ * Check if Media/Gallery permission is granted on the device (Android & iOS).
+ * Tests live native PackageManager status on Android for 100% accuracy.
+ */
+export async function hasMediaPermissions(): Promise<boolean> {
+  if (Platform.OS === 'web') return true;
+
+  if (Platform.OS === 'android') {
+    try {
+      const nativeOk = await checkMediaPermissionsNative();
+      if (nativeOk) return true;
+    } catch {
+      // fallback to MediaLibrary
+    }
+  }
+
+  try {
+    const res = await MediaLibrary.getPermissionsAsync();
+    return res.granted || res.status === 'granted';
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Request Media/Gallery permissions interactively.
+ */
+export async function requestMediaPermissions(): Promise<boolean> {
+  if (Platform.OS === 'web') return true;
+  useVaultStore.getState().startMediaPick();
+  try {
+    const res = await MediaLibrary.requestPermissionsAsync(true);
+    if (res.granted || res.status === 'granted') {
+      return true;
+    }
+    if (Platform.OS === 'android') {
+      return await checkMediaPermissionsNative();
+    }
+    return false;
+  } catch (err) {
+    console.warn('requestMediaPermissions error:', err);
+    return false;
+  } finally {
+    useVaultStore.getState().endMediaPick(5000);
+  }
+}
+
+/**
+ * Check if the app can install APKs
+ */
+export async function canInstallUnknownApps(): Promise<boolean> {
+  if (Platform.OS !== 'android') return true;
+  return await canInstallApkNative();
+}
+
+/**
+ * Open Install Unknown Apps settings
+ */
+export async function requestInstallUnknownApps(): Promise<boolean> {
+  if (Platform.OS !== 'android') return true;
+  useVaultStore.getState().startMediaPick();
+  try {
+    return await openInstallPermissionSettingsNative();
+  } finally {
+    useVaultStore.getState().endMediaPick(5000);
+  }
+}
+
+/**
+ * Open Calculator's application details in Android system settings
+ */
+export async function openAppSystemSettings(): Promise<boolean> {
+  if (Platform.OS !== 'android') return true;
+  useVaultStore.getState().startMediaPick();
+  try {
+    return await openAppSettingsNative();
+  } finally {
+    useVaultStore.getState().endMediaPick(5000);
+  }
+}
+
+/**
+ * Request/Check all required initial permissions for Media and Storage
  */
 export async function requestInitialPermissions(): Promise<{
   mediaGranted: boolean;
@@ -398,10 +483,9 @@ export async function requestInitialPermissions(): Promise<{
 
   let mediaGranted = false;
   try {
-    const res = await MediaLibrary.requestPermissionsAsync(true);
-    mediaGranted = res.status === 'granted';
-  } catch (err) {
-    console.warn('requestPermissionsAsync error:', err);
+    mediaGranted = await hasMediaPermissions();
+  } catch {
+    mediaGranted = false;
   }
 
   let allFilesGranted = true;

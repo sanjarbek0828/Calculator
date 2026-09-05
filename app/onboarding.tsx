@@ -18,6 +18,8 @@ import {
   Animated,
   Platform,
   ScrollView,
+  AppState,
+  Alert,
 } from 'react-native';
 import { useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
@@ -26,9 +28,11 @@ import { storePin } from '../src/services/pinService';
 import { setOnboarded } from '../src/services/secureStore';
 import { useVaultStore } from '../src/store/vaultStore';
 import {
-  requestInitialPermissions,
+  hasMediaPermissions,
+  requestMediaPermissions,
   hasAllFilesAccess,
   requestAllFilesAccess,
+  openAppSystemSettings,
 } from '../src/services/vaultStorage';
 
 type Step = 'create' | 'confirm' | 'permissions';
@@ -41,24 +45,35 @@ export default function OnboardingScreen() {
   const [pin, setPin] = useState('');
   const [firstPin, setFirstPin] = useState('');
   const [error, setError] = useState('');
+  const [mediaGranted, setMediaGranted] = useState(false);
   const [allFilesGranted, setAllFilesGranted] = useState(false);
   const shakeAnim = useRef(new Animated.Value(0)).current;
 
   const maxDigits = 6;
   const minDigits = 4;
 
-  // ── Automatically request media permissions on initial entry ──
-  useEffect(() => {
-    (async () => {
-      useVaultStore.getState().startMediaPick();
-      try {
-        const res = await requestInitialPermissions();
-        setAllFilesGranted(res.allFilesGranted);
-      } finally {
-        useVaultStore.getState().endMediaPick(5000);
-      }
-    })();
+  // ── Query real live permissions on device ──
+  const checkPermissions = useCallback(async () => {
+    const mg = await hasMediaPermissions();
+    const fg = await hasAllFilesAccess();
+    setMediaGranted(mg);
+    setAllFilesGranted(fg);
+    return { mg, fg };
   }, []);
+
+  useEffect(() => {
+    checkPermissions();
+  }, [checkPermissions]);
+
+  // ── Re-check permissions when returning from Android Settings ──
+  useEffect(() => {
+    const sub = AppState.addEventListener('change', (next) => {
+      if (next === 'active') {
+        checkPermissions();
+      }
+    });
+    return () => sub.remove();
+  }, [checkPermissions]);
 
   // ── Shake animation for errors ────────────────────────────────
   const shake = useCallback(() => {
@@ -96,6 +111,35 @@ export default function OnboardingScreen() {
     router.replace('/');
   }, [router, setOnboardedState]);
 
+  // ── Request Gallery Permissions ───────────────────────────────
+  const handleRequestMedia = useCallback(async () => {
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+    const granted = await requestMediaPermissions();
+    setMediaGranted(granted);
+    if (!granted) {
+      Alert.alert(
+        'Galereyaga ruxsat berish',
+        'Rasmlar va videolarni tanlash uchun telefon sozlamalaridan Calculator ilovasiga "Rasmlar va videolar" ruxsatini yoqing.',
+        [
+          { text: 'Bekor', style: 'cancel' },
+          {
+            text: 'Sozlamalarni ochish',
+            onPress: () => openAppSystemSettings(),
+          },
+        ]
+      );
+    }
+  }, []);
+
+  // ── Request All Files Access (MANAGE_EXTERNAL_STORAGE) ─────────
+  const handleRequestAllFiles = useCallback(async () => {
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+    await requestAllFilesAccess();
+    setTimeout(async () => {
+      checkPermissions();
+    }, 1500);
+  }, [checkPermissions]);
+
   // ── Submit PIN ─────────────────────────────────────────────────
   const submit = useCallback(async () => {
     if (pin.length < minDigits) {
@@ -120,11 +164,10 @@ export default function OnboardingScreen() {
       // PINs match — hash and store
       await storePin(pin);
 
-      // Check if All Files Access is granted on Android 11+ / Android 14
+      // Check if permissions are granted on Android
       if (Platform.OS === 'android') {
-        const hasAccess = await hasAllFilesAccess();
-        setAllFilesGranted(hasAccess);
-        if (!hasAccess) {
+        const { mg, fg } = await checkPermissions();
+        if (!mg || !fg) {
           setStep('permissions');
           return;
         }
@@ -132,24 +175,7 @@ export default function OnboardingScreen() {
 
       await finishOnboarding();
     }
-  }, [pin, step, firstPin, shake, finishOnboarding]);
-
-  // ── Request All Files Permission in Permissions step ───────────
-  const handleRequestAllFiles = useCallback(async () => {
-    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
-    useVaultStore.getState().startMediaPick();
-    try {
-      await requestAllFilesAccess();
-
-      // Check again after user returns
-      setTimeout(async () => {
-        const has = await hasAllFilesAccess();
-        setAllFilesGranted(has);
-      }, 1500);
-    } finally {
-      useVaultStore.getState().endMediaPick(5000);
-    }
-  }, []);
+  }, [pin, step, firstPin, shake, checkPermissions, finishOnboarding]);
 
   // ── Render Permissions Step ────────────────────────────────────
   if (step === 'permissions') {
@@ -162,32 +188,46 @@ export default function OnboardingScreen() {
 
           <Text style={styles.permTitle}>Kerakli Ruxsatlar</Text>
           <Text style={styles.permSub}>
-            {"Calculatorga yuklangan rasm va videolar telefondan to'liq o'chishi va faqat ilova ichida qolishi uchun quyidagi ruxsat talab qilinadi."}
+            {"Calculator to'liq va xavfsiz ishlashi, rasmlar va videolarni yashirish uchun quyidagi ruxsatlarni yoqing."}
           </Text>
 
           {/* Feature highlights */}
           <View style={styles.permCard}>
+            {/* Gallery Permission */}
             <View style={styles.permRow}>
               <Ionicons name="images-outline" size={24} color="#FF9500" style={styles.permRowIcon} />
               <View style={styles.permRowText}>
                 <Text style={styles.permRowTitle}>Galereya ruxsati</Text>
                 <Text style={styles.permRowDesc}>Rasmlar va videolarni tanlash uchun</Text>
               </View>
-              <Ionicons name="checkmark-circle" size={24} color="#34C759" />
+              {mediaGranted ? (
+                <View style={styles.grantedBadge}>
+                  <Ionicons name="checkmark-circle" size={22} color="#34C759" />
+                  <Text style={styles.grantedText}>Berilgan</Text>
+                </View>
+              ) : (
+                <Pressable style={styles.grantBtn} onPress={handleRequestMedia}>
+                  <Text style={styles.grantBtnText}>Ruxsat berish</Text>
+                </Pressable>
+              )}
             </View>
 
             <View style={styles.divider} />
 
+            {/* All Files Access Permission */}
             <View style={styles.permRow}>
               <Ionicons name="folder-open-outline" size={24} color="#FF9500" style={styles.permRowIcon} />
               <View style={styles.permRowText}>
                 <Text style={styles.permRowTitle}>Barcha fayllarga ruxsat (Android 14)</Text>
                 <Text style={styles.permRowDesc}>
-                  {"Yuklangan asl fayllarni galereyadan avtomatik o'chirish uchun zarur"}
+                  {"Yuklangan asl fayllarni galereyadan to'liq o'chirish uchun"}
                 </Text>
               </View>
               {allFilesGranted ? (
-                <Ionicons name="checkmark-circle" size={24} color="#34C759" />
+                <View style={styles.grantedBadge}>
+                  <Ionicons name="checkmark-circle" size={22} color="#34C759" />
+                  <Text style={styles.grantedText}>Berilgan</Text>
+                </View>
               ) : (
                 <Pressable style={styles.grantBtn} onPress={handleRequestAllFiles}>
                   <Text style={styles.grantBtnText}>Yoqish</Text>
@@ -196,16 +236,20 @@ export default function OnboardingScreen() {
             </View>
           </View>
 
-          {!allFilesGranted && (
-            <Pressable style={styles.fullGrantBtn} onPress={handleRequestAllFiles}>
-              <Ionicons name="lock-open-outline" size={20} color="#000000" style={{ marginRight: 8 }} />
-              <Text style={styles.fullGrantBtnText}>Barcha fayllarga ruxsat berish</Text>
+          {/* Direct link to Android Application Settings */}
+          {(!mediaGranted || !allFilesGranted) && (
+            <Pressable style={styles.settingsLinkBtn} onPress={openAppSystemSettings}>
+              <Ionicons name="settings-outline" size={18} color="#FF9500" style={{ marginRight: 8 }} />
+              <Text style={styles.settingsLinkText}>Telefon Sozlamalaridan Ochish</Text>
             </Pressable>
           )}
 
-          <Pressable style={styles.continueBtn} onPress={finishOnboarding}>
-            <Text style={styles.continueBtnText}>
-              {allFilesGranted ? 'Kalkulyatorni boshlash' : 'Davom etish'}
+          <Pressable
+            style={[styles.continueBtn, (mediaGranted && allFilesGranted) && styles.continueBtnActive]}
+            onPress={finishOnboarding}
+          >
+            <Text style={[styles.continueBtnText, (mediaGranted && allFilesGranted) && styles.continueBtnTextActive]}>
+              {mediaGranted && allFilesGranted ? 'Kalkulyatorni boshlash' : 'Davom etish'}
             </Text>
           </Pressable>
         </ScrollView>
@@ -483,20 +527,36 @@ const styles = StyleSheet.create({
     fontWeight: '600',
     color: '#FF9500',
   },
-  fullGrantBtn: {
+  grantedBadge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    backgroundColor: 'rgba(52, 199, 89, 0.12)',
+    borderRadius: 8,
+  },
+  grantedText: {
+    fontSize: 12,
+    fontWeight: '600',
+    color: '#34C759',
+  },
+  settingsLinkBtn: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
-    backgroundColor: '#FF9500',
-    width: '100%',
-    paddingVertical: 16,
+    backgroundColor: 'rgba(255, 149, 0, 0.1)',
+    borderWidth: 1,
+    borderColor: 'rgba(255, 149, 0, 0.3)',
     borderRadius: 14,
-    marginBottom: 12,
+    paddingVertical: 14,
+    marginBottom: 16,
+    width: '100%',
   },
-  fullGrantBtnText: {
-    fontSize: 16,
-    fontWeight: '700',
-    color: '#000000',
+  settingsLinkText: {
+    fontSize: 14,
+    fontWeight: '600',
+    color: '#FF9500',
   },
   continueBtn: {
     alignItems: 'center',
@@ -506,9 +566,16 @@ const styles = StyleSheet.create({
     paddingVertical: 15,
     borderRadius: 14,
   },
+  continueBtnActive: {
+    backgroundColor: '#FF9500',
+  },
   continueBtnText: {
     fontSize: 16,
     fontWeight: '600',
-    color: '#FFFFFF',
+    color: '#8E8E93',
+  },
+  continueBtnTextActive: {
+    color: '#000000',
+    fontWeight: '700',
   },
 });

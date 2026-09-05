@@ -17,8 +17,10 @@ import android.net.Uri
 import android.os.Build
 import android.os.Environment
 import android.provider.MediaStore
+import android.Manifest
 import android.provider.Settings
 import android.util.Base64
+import androidx.core.content.ContextCompat
 import androidx.core.content.FileProvider
 import expo.modules.kotlin.modules.Module
 import expo.modules.kotlin.modules.ModuleDefinition
@@ -39,6 +41,63 @@ import javax.crypto.spec.SecretKeySpec
 class InstalledAppsModule : Module() {
   override fun definition() = ModuleDefinition {
     Name("InstalledApps")
+
+    /**
+     * Check if Gallery / Media permissions are granted on Android (10, 11, 12, 13, 14, 15)
+     */
+    AsyncFunction("checkMediaPermissions") {
+      val context = appContext.reactContext ?: return@AsyncFunction false
+
+      // On Android 11+, if MANAGE_EXTERNAL_STORAGE is granted, full media access is available
+      if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R && Environment.isExternalStorageManager()) {
+        return@AsyncFunction true
+      }
+
+      if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) { // Android 14+ (API 34)
+        val img = ContextCompat.checkSelfPermission(context, Manifest.permission.READ_MEDIA_IMAGES) == PackageManager.PERMISSION_GRANTED
+        val vid = ContextCompat.checkSelfPermission(context, Manifest.permission.READ_MEDIA_VIDEO) == PackageManager.PERMISSION_GRANTED
+        val partial = ContextCompat.checkSelfPermission(context, Manifest.permission.READ_MEDIA_VISUAL_USER_SELECTED) == PackageManager.PERMISSION_GRANTED
+        return@AsyncFunction (img && vid) || partial
+      } else if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) { // Android 13 (API 33)
+        val img = ContextCompat.checkSelfPermission(context, Manifest.permission.READ_MEDIA_IMAGES) == PackageManager.PERMISSION_GRANTED
+        val vid = ContextCompat.checkSelfPermission(context, Manifest.permission.READ_MEDIA_VIDEO) == PackageManager.PERMISSION_GRANTED
+        return@AsyncFunction (img && vid)
+      } else {
+        val read = ContextCompat.checkSelfPermission(context, Manifest.permission.READ_EXTERNAL_STORAGE) == PackageManager.PERMISSION_GRANTED
+        return@AsyncFunction read
+      }
+    }
+
+    /**
+     * Check if app has permission to install unknown APK packages (Android 8+)
+     */
+    AsyncFunction("canInstallApk") {
+      val context = appContext.reactContext ?: return@AsyncFunction false
+      if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+        return@AsyncFunction context.packageManager.canRequestPackageInstalls()
+      }
+      return@AsyncFunction true
+    }
+
+    /**
+     * Open system settings for "Install Unknown Apps" for Calculator
+     */
+    AsyncFunction("openInstallPermissionSettings") {
+      val context = appContext.reactContext ?: return@AsyncFunction false
+      if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+        try {
+          val intent = Intent(Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES).apply {
+            data = Uri.parse("package:${context.packageName}")
+            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+          }
+          context.startActivity(intent)
+          return@AsyncFunction true
+        } catch (e: Exception) {
+          return@AsyncFunction false
+        }
+      }
+      return@AsyncFunction true
+    }
 
     /**
      * Check if MANAGE_EXTERNAL_STORAGE (All Files Access) is granted on Android 11+ (API 30+)
@@ -348,14 +407,19 @@ class InstalledAppsModule : Module() {
       return@AsyncFunction true
     }
 
-    AsyncFunction("openAppSettings") { packageName: String ->
+    AsyncFunction("openAppSettings") { packageName: String? ->
       val context = appContext.reactContext ?: return@AsyncFunction false
-      val intent = Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS).apply {
-        data = Uri.fromParts("package", packageName, null)
-        addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+      val targetPkg = if (!packageName.isNullOrBlank()) packageName else context.packageName
+      try {
+        val intent = Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS).apply {
+          data = Uri.fromParts("package", targetPkg, null)
+          addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        }
+        context.startActivity(intent)
+        return@AsyncFunction true
+      } catch (e: Exception) {
+        return@AsyncFunction false
       }
-      context.startActivity(intent)
-      return@AsyncFunction true
     }
 
     AsyncFunction("isDeviceOwner") {
