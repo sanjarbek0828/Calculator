@@ -287,7 +287,7 @@ export async function deleteOriginalsFromGallery(
   if (Platform.OS === 'web') return false;
 
   // Crucial: keep auto-lock suspended while the system delete confirmation dialog is showing on Android
-  useVaultStore.getState().suspendAutoLock(120000);
+  useVaultStore.getState().startMediaPick();
 
   let anyDeleted = false;
 
@@ -357,6 +357,8 @@ export async function deleteOriginalsFromGallery(
     }
   } catch (error: any) {
     console.warn('Failed to delete originals from gallery:', error?.message ?? error);
+  } finally {
+    useVaultStore.getState().endMediaPick(5000);
   }
 
   return anyDeleted;
@@ -375,7 +377,12 @@ export async function hasAllFilesAccess(): Promise<boolean> {
  */
 export async function requestAllFilesAccess(): Promise<boolean> {
   if (Platform.OS !== 'android') return true;
-  return await requestManageExternalStoragePermissionNative();
+  useVaultStore.getState().startMediaPick();
+  try {
+    return await requestManageExternalStoragePermissionNative();
+  } finally {
+    useVaultStore.getState().endMediaPick(5000);
+  }
 }
 
 /**

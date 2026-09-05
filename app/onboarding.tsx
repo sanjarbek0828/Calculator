@@ -50,9 +50,13 @@ export default function OnboardingScreen() {
   // ── Automatically request media permissions on initial entry ──
   useEffect(() => {
     (async () => {
-      useVaultStore.getState().suspendAutoLock(120000);
-      const res = await requestInitialPermissions();
-      setAllFilesGranted(res.allFilesGranted);
+      useVaultStore.getState().startMediaPick();
+      try {
+        const res = await requestInitialPermissions();
+        setAllFilesGranted(res.allFilesGranted);
+      } finally {
+        useVaultStore.getState().endMediaPick(5000);
+      }
     })();
   }, []);
 
@@ -133,14 +137,18 @@ export default function OnboardingScreen() {
   // ── Request All Files Permission in Permissions step ───────────
   const handleRequestAllFiles = useCallback(async () => {
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
-    useVaultStore.getState().suspendAutoLock(120000);
-    await requestAllFilesAccess();
+    useVaultStore.getState().startMediaPick();
+    try {
+      await requestAllFilesAccess();
 
-    // Check again after user returns
-    setTimeout(async () => {
-      const has = await hasAllFilesAccess();
-      setAllFilesGranted(has);
-    }, 1500);
+      // Check again after user returns
+      setTimeout(async () => {
+        const has = await hasAllFilesAccess();
+        setAllFilesGranted(has);
+      }, 1500);
+    } finally {
+      useVaultStore.getState().endMediaPick(5000);
+    }
   }, []);
 
   // ── Render Permissions Step ────────────────────────────────────

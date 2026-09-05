@@ -254,7 +254,6 @@ export default function PhotosTab() {
 
         // Delete originals from gallery using confirmed MediaLibrary IDs and Native engine
         if (assetIdsToDelete.length > 0 || urisToDelete.length > 0 || metaToDelete.length > 0) {
-          useVaultStore.getState().suspendAutoLock(180000);
           await deleteOriginalsFromGallery(assetIdsToDelete, urisToDelete, metaToDelete);
         }
 
@@ -330,7 +329,6 @@ export default function PhotosTab() {
       }
 
       if (assetIdsToDelete.length > 0 || urisToDelete.length > 0 || metaToDelete.length > 0) {
-        useVaultStore.getState().suspendAutoLock(180000);
         await deleteOriginalsFromGallery(assetIdsToDelete, urisToDelete, metaToDelete);
       }
 

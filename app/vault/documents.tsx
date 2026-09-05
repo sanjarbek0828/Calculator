@@ -46,8 +46,7 @@ export default function DocumentsTab() {
 
   // ── Import ────────────────────────────────────────────────────
   const handleImport = useCallback(async () => {
-    useVaultStore.getState().suspendAutoLock(120000);
-    useVaultStore.getState().incrementPickingMedia();
+    useVaultStore.getState().startMediaPick();
 
     try {
       const result = await DocumentPicker.getDocumentAsync({
@@ -69,7 +68,7 @@ export default function DocumentsTab() {
 
       loadFiles();
     } finally {
-      useVaultStore.getState().decrementPickingMedia();
+      useVaultStore.getState().endMediaPick(4000);
     }
   }, [loadFiles]);
 

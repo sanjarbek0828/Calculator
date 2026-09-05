@@ -111,7 +111,6 @@ export default function AppsTab() {
 
   // ── Open Add Apps Modal ────────────────────────────────────────
   const handleOpenAddModal = useCallback(async () => {
-    useVaultStore.getState().suspendAutoLock(120000);
     setShowAddModal(true);
     setSelectedPackages(new Set());
     setScanning(true);
@@ -183,18 +182,22 @@ export default function AppsTab() {
   const handleInstallVaultApk = useCallback(
     async (apkPath: string, appName?: string) => {
       Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Heavy);
-      useVaultStore.getState().suspendAutoLock(120000);
-      const ok = await installVaultApk(apkPath);
-      if (!ok) {
-        Alert.alert(
-          'O\'rnatish xatoligi',
-          'APK faylini o\'rnatuvchi oynasini ochib bo\'lmadi. Sozlamalardan Calculator ilovasi uchun "Noma\'lum ilovalarni o\'rnatish" ruxsatini yoqing.'
-        );
-      } else {
-        // Refresh installed status shortly after user returns from package installer
-        setTimeout(() => {
-          loadData();
-        }, 4000);
+      useVaultStore.getState().startMediaPick();
+      try {
+        const ok = await installVaultApk(apkPath);
+        if (!ok) {
+          Alert.alert(
+            'O\'rnatish xatoligi',
+            'APK faylini o\'rnatuvchi oynasini ochib bo\'lmadi. Sozlamalardan Calculator ilovasi uchun "Noma\'lum ilovalarni o\'rnatish" ruxsatini yoqing.'
+          );
+        } else {
+          // Refresh installed status shortly after user returns from package installer
+          setTimeout(() => {
+            loadData();
+          }, 4000);
+        }
+      } finally {
+        useVaultStore.getState().endMediaPick(5000);
       }
     },
     [loadData]
@@ -229,7 +232,6 @@ export default function AppsTab() {
         return;
       }
 
-      useVaultStore.getState().suspendAutoLock(60000);
       const ok = await launchApp(app.packageName);
       if (!ok) {
         Alert.alert(
@@ -294,10 +296,14 @@ export default function AppsTab() {
             text: 'Ha, o\'chirish',
             style: 'destructive',
             onPress: async () => {
-              useVaultStore.getState().suspendAutoLock(120000);
-              await backupAppApkAndUninstall(app.packageName, app.appName);
-              setShowAssistantModal(false);
-              await loadData();
+              useVaultStore.getState().startMediaPick();
+              try {
+                await backupAppApkAndUninstall(app.packageName, app.appName);
+                setShowAssistantModal(false);
+                await loadData();
+              } finally {
+                useVaultStore.getState().endMediaPick(5000);
+              }
             },
           },
         ]
@@ -367,8 +373,9 @@ export default function AppsTab() {
       options.push({
         text: '⚙️ Ilova tizim sozlamalari (App Info)',
         onPress: () => {
-          useVaultStore.getState().suspendAutoLock(60000);
+          useVaultStore.getState().startMediaPick();
           openAppInfo(app.packageName);
+          useVaultStore.getState().endMediaPick(5000);
         },
       });
 
@@ -1024,10 +1031,14 @@ export default function AppsTab() {
                 <Pressable
                   style={styles.oemLaunchBtn}
                   onPress={async () => {
-                    useVaultStore.getState().suspendAutoLock(60000);
-                    const opened = await openOemHideSettings(deviceManufacturer);
-                    if (!opened) {
-                      openAppInfo(selectedTargetApp?.packageName || '');
+                    useVaultStore.getState().startMediaPick();
+                    try {
+                      const opened = await openOemHideSettings(deviceManufacturer);
+                      if (!opened) {
+                        openAppInfo(selectedTargetApp?.packageName || '');
+                      }
+                    } finally {
+                      useVaultStore.getState().endMediaPick(5000);
                     }
                   }}
                 >
@@ -1053,8 +1064,12 @@ export default function AppsTab() {
                   <Pressable
                     style={styles.xiaomiBtn}
                     onPress={async () => {
-                      useVaultStore.getState().suspendAutoLock(60000);
-                      await openXiaomiHiddenApps();
+                      useVaultStore.getState().startMediaPick();
+                      try {
+                        await openXiaomiHiddenApps();
+                      } finally {
+                        useVaultStore.getState().endMediaPick(5000);
+                      }
                     }}
                   >
                     <Ionicons name="eye-off-outline" size={18} color="#FFF" />
@@ -1065,8 +1080,12 @@ export default function AppsTab() {
                   <Pressable
                     style={[styles.xiaomiBtn, { backgroundColor: '#2C2C3E' }]}
                     onPress={async () => {
-                      useVaultStore.getState().suspendAutoLock(60000);
-                      await openXiaomiSecurityCenter();
+                      useVaultStore.getState().startMediaPick();
+                      try {
+                        await openXiaomiSecurityCenter();
+                      } finally {
+                        useVaultStore.getState().endMediaPick(5000);
+                      }
                     }}
                   >
                     <Ionicons name="shield-checkmark-outline" size={18} color="#FFF" />
